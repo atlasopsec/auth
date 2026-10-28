@@ -137,14 +137,43 @@ func (a *Auth) RequireOrg(permission rbac.Permission, h http.Handler) http.Handl
 	if !a.orgRoles.Mentions(permission) {
 		panic(fmt.Sprintf("auth: RequireOrg(%q): no role in Config.OrgRoles has this permission; is it misspelled?", permission))
 	}
+	return a.orgRoute(permission, orgFromHeader, h)
+}
+
+// orgSource is where a request names its organization.
+type orgSource struct {
+	id func(*http.Request) (uuid.UUID, error)
+	// bad writes the response for a missing or malformed ID.
+	bad func(http.ResponseWriter, *http.Request)
+}
+
+// orgFromHeader reads the X-Organization-ID header, for project routes.
+var orgFromHeader = orgSource{
+	id: func(r *http.Request) (uuid.UUID, error) { return uuid.Parse(r.Header.Get(OrgHeader)) },
+	bad: func(w http.ResponseWriter, r *http.Request) {
+		httpapi.WriteError(w, r, http.StatusBadRequest, "bad_request", "Set the X-Organization-ID header to an organization ID.", nil)
+	},
+}
+
+// orgFromPath reads the {id} path value, for the module's own
+// /v1/organizations/{id} endpoints. A malformed ID can't name an
+// organization, so it's a 404 like any other.
+var orgFromPath = orgSource{
+	id:  func(r *http.Request) (uuid.UUID, error) { return uuid.Parse(r.PathValue("id")) },
+	bad: writeNotFound,
+}
+
+// orgRoute checks the user is a member of the organization src names and,
+// unless permission is empty, that their role there grants it.
+func (a *Auth) orgRoute(permission rbac.Permission, src orgSource, h http.Handler) http.Handler {
 	return guarded{httpapi.WithRequestID(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		c, ok := a.authenticate(w, r)
 		if !ok {
 			return
 		}
-		orgID, err := uuid.Parse(r.Header.Get(OrgHeader))
+		orgID, err := src.id(r)
 		if err != nil {
-			httpapi.WriteError(w, r, http.StatusBadRequest, "bad_request", "Set the X-Organization-ID header to an organization ID.", nil)
+			src.bad(w, r)
 			return
 		}
 		role, err := a.q.GetMembershipRole(r.Context(), db.GetMembershipRoleParams{OrganizationID: orgID, UserID: c.user.ID})
@@ -159,7 +188,7 @@ func (a *Auth) RequireOrg(permission rbac.Permission, h http.Handler) http.Handl
 		a.warnUndefinedRole(r, a.orgRoles, role, c.user.ID)
 		c.org = &Org{ID: orgID, Role: role}
 		c.can = func(p rbac.Permission) bool { return a.orgCan(role, p) }
-		if !c.can(permission) {
+		if permission != "" && !c.can(permission) {
 			writeForbidden(w, r)
 			return
 		}
