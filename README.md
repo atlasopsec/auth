@@ -27,7 +27,7 @@ How the module is structured and how projects use it: [docs/design.md](docs/desi
 
 ## Roadmap
 
-- [ ] Password hashing and secure token generation
+- [x] Password hashing and secure token generation
 - [ ] Database schema, embedded migrations, and sessions
 - [ ] HTTP middleware (cookies, bearer tokens, error responses)
 - [ ] Sign-up, login, email verification, and password reset
