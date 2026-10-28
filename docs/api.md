@@ -2,7 +2,7 @@
 
 The module's public Go API and the HTTP endpoints it serves.
 
-> **Status: approved.** Covers build step 3 (sign up, log in, log out, sessions), plus how sign-up changes when email verification arrives in step 4. Later steps (RBAC, 2FA, OAuth) add to it but don't change what's here. Sections marked **(Decision)** were confirmed in review; see §5.
+> **Status:** §1–5 (build step 3) are approved and built. §6 (build step 4: email) is a **sketch for review**; its **(Decision)** items need sign-off before code is written. Later steps (RBAC, 2FA, OAuth) add to this but don't change what's here.
 
 Once a name below is released, changing or removing it is a breaking change (a new major version), so this is the moment to get it right.
 
@@ -270,3 +270,251 @@ Confirmed in review on 2026-10-28:
 5. **`client` is a required body field** on sign-up and login.
 6. **Unknown JSON fields are rejected.** Deploy the API before app versions that send new fields.
 7. **The forwarded user agent header is named `X-Forwarded-User-Agent`.**
+
+---
+
+## 6. Step 4: email (sketch for review)
+
+Step 4 adds everything that needs email: verification (and verify first as the default), password reset, password change, email change, and the breached-password check. It follows the [auth standard](https://github.com/jakefrenzel/engineering-standards/blob/main/standards/auth.md) §3 and §11.
+
+### Configuration
+
+```go
+type Config struct {
+	// ...everything from §1, plus:
+
+	// Mailer sends the module's emails. Required.
+	Mailer mail.Mailer
+
+	// AppURL is the web app's base URL, for links in emails,
+	// e.g. "https://app.example.com".
+	AppURL string
+
+	// AppName appears in email subjects and text, e.g. "Acme".
+	AppName string
+
+	// AllowUnverifiedLogin lets users log in before verifying their email,
+	// and makes sign-up log them in immediately. Off by default (§2).
+	AllowUnverifiedLogin bool
+
+	// DisableBreachCheck turns off the Have I Been Pwned check on new
+	// passwords. On by default.
+	DisableBreachCheck bool
+
+	// Emails overrides the default email templates. Any nil field uses the
+	// default.
+	Emails Emails
+}
+
+// Close waits for emails still being sent, up to ctx's deadline. Call it
+// when the server shuts down.
+func (a *Auth) Close(ctx context.Context) error
+```
+
+The `mail` package is public, because projects choose or write the mailer:
+
+```go
+package mail
+
+type Mailer interface {
+	Send(ctx context.Context, m Message) error
+}
+
+type Message struct {
+	To      string
+	Subject string
+	Text    string // always set
+	HTML    string // optional
+	// IdempotencyKey lets a provider drop duplicates when a send is retried.
+	IdempotencyKey string
+}
+```
+
+- **`mail/resend`:** `resend.New(apiKey, from string) mail.Mailer`, using Resend's Go SDK as the standard says. It's in its own package, so only projects that import it compile it.
+- **`mailtest.Recorder`:** a fake that records messages, for project tests.
+- **`mail.NewWriter(w io.Writer)`** for local development: prints each email, links included, to `w`. It logs a warning at startup, because links contain live tokens and must never be printed in production.
+
+### Sending happens in the background (Decision)
+
+Endpoints that send email respond first and send afterwards, in a background goroutine with up to 3 retries.
+
+- **No timing leak:** "send a reset link" takes the same time whether or not the account exists. Sending synchronously would make real accounts noticeably slower (Resend takes 200–500 ms).
+- **Why not an outbox table** (store emails in Postgres, send from a worker): the emails contain live tokens, so the table would hold working reset links in plain text, which is exactly what hashing tokens avoids.
+- **Trade-off:** an email in flight when the server stops is lost, and the user clicks "resend". `Close` keeps that window small on a normal deploy.
+
+### Emails and templates (Decision)
+
+| Email | Sent when |
+|---|---|
+| Verify your email | Sign-up (verify first mode), or a resend request |
+| Someone tried to sign up with your email | Sign-up with an email that already has a verified account |
+| Reset your password | Reset requested for an existing account |
+| Your password was changed | After a password change or reset |
+| Confirm your new email | Email change requested (sent to the new address) |
+| Your email was changed | Email change completed (sent to the old address) |
+
+Defaults are **plain text, brandless, and short**: plain text reaches inboxes most reliably and needs no design. Projects override any of them:
+
+```go
+type Emails struct {
+	VerifyEmail, SignUpAttempt, PasswordReset, PasswordChanged,
+	EmailChange, EmailChanged func(EmailData) (subject, text, html string)
+}
+
+type EmailData struct {
+	AppName   string
+	Link      string        // empty for notices
+	ExpiresIn time.Duration // how long Link works
+}
+```
+
+### Links carry the token in the fragment (Decision)
+
+Links point at the **Next.js app** (the Go API isn't public), with the token after `#`:
+
+```
+https://app.example.com/verify-email#token=q3J…
+https://app.example.com/reset-password#token=q3J…
+```
+
+- Browsers never send the fragment to servers, so tokens stay out of Railway's access logs, analytics, and `Referer` headers. A query string (`?token=`) would leak into all three.
+- The cost: the page reads the token in a small client component and posts it to a server action. That fits the standard's "small leaf components" rule, and the Next.js template (step 9) includes these pages.
+- The API's confirm endpoints take the token in the JSON body, never in the path. This changes the `.../{token}/confirm` paths in design.md §5.
+
+### Tokens
+
+Stored in a new `auth.email_tokens` table (only the SHA-256 hash, like sessions). Every token is single-use, and requesting a new one cancels the user's earlier unused tokens of the same kind.
+
+| Kind | Lifetime |
+|---|---|
+| Verify email | 24 hours |
+| Reset password | 30 minutes (the standard) |
+| Change email | 1 hour |
+
+A bad, used, or expired token returns `422 token_invalid_or_expired`, with the same response for all three.
+
+### Endpoints
+
+| Endpoint | Purpose | Auth | Success |
+|---|---|---|---|
+| `POST /v1/email-verifications` | Send a verification email | Public | `202` |
+| `POST /v1/email-verifications/confirm` | Verify, and log in | Public | `201` |
+| `POST /v1/password-resets` | Send a reset email | Public | `202` |
+| `POST /v1/password-resets/confirm` | Set a new password | Public | `204` |
+| `POST /v1/users/me/password` | Change password | Session | `204` |
+| `POST /v1/email-changes` | Start changing email | Session | `202` |
+| `POST /v1/email-changes/confirm` | Finish changing email | Public | `204` |
+
+#### Sign-up in verify first mode
+
+As approved in §2: `202 { "verification_required": true }`, identical whether or not the email exists. Behind that response:
+
+| The email… | What happens |
+|---|---|
+| Is new | Account created, unverified. Verification email sent |
+| Belongs to an unverified account | Nothing changes. A new verification email is sent, which also offers a password reset |
+| Belongs to a verified account | Nothing changes. "Someone tried to sign up" email sent |
+
+#### Verification asks for the password (Decision)
+
+```json
+POST /v1/email-verifications/confirm
+{ "token": "q3J…", "password": "correct horse battery staple", "client": "web" }
+```
+
+`201` with the same body as login: the user is verified **and** logged in.
+
+**Why ask for the password:** it closes the last squatting hole in verify first. Without it, an attacker signs up with your email and a password they know, and the verification email lands in your inbox. If you click it, you've verified *their* account, and they can log in. With the password required, clicking their link does nothing, because you don't know their password. Their unverified account doesn't lock you out either: a password reset (below) takes it over.
+
+- The UX is "click link, enter password, you're in", which is the login you'd do next anyway.
+- A wrong password returns `401 invalid_credentials`. After 5 wrong passwords the token stops working, so a stolen link can't be used to guess passwords.
+
+`POST /v1/email-verifications` takes `{ "email": "…" }` and always returns `202`. It sends only if the account exists and isn't verified.
+
+#### Password reset
+
+- `POST /v1/password-resets` with `{ "email": "…" }` always returns `202`. It sends only if the account exists.
+- `POST /v1/password-resets/confirm` with `{ "token": "…", "password": "…" }` then:
+  - sets the new password (policy and breach check apply),
+  - **marks the email verified**, since the user just proved they control it,
+  - **ends all sessions** (the standard),
+  - sends "your password was changed".
+- It doesn't log the user in. They log in with the new password.
+- **(Decision)** Marking the email verified is what lets a reset take over a squatted account: the attacker's password is replaced and their sessions end.
+- Accounts that only use OAuth can use reset to add a password.
+
+#### Password change
+
+`POST /v1/users/me/password` with `{ "current_password": "…", "new_password": "…" }`:
+
+- A wrong current password returns `422 validation_failed` with `current_password: incorrect`. It isn't `401`, which would make the app think the user was logged out.
+- Ends all **other** sessions (the standard) and sends "your password was changed".
+- OAuth-only accounts have no current password, so they use reset instead.
+
+#### Email change (Decision)
+
+The standard requires verifying the new address and notifying the old one, so this is part of step 4.
+
+1. `POST /v1/email-changes` with `{ "email": "new@example.com", "current_password": "…" }`. The account must already be verified.
+   - Returns `202`, even if the new address belongs to another account. In that case the new address gets the "someone tried to sign up" email instead, so this endpoint can't be used to find accounts.
+2. The new address gets a link. `POST /v1/email-changes/confirm` with `{ "token": "…" }`:
+   - switches the email,
+   - **ends all sessions**,
+   - emails the old address.
+   - Returns `204`.
+
+#### Login changes
+
+In verify first mode, logging in to an unverified account with the correct password returns `403 email_not_verified`, as approved in §2.
+
+### Breached passwords (Decision)
+
+New passwords (sign-up, reset, change) are checked against [Have I Been Pwned](https://haveibeenpwned.com/API/v3#PwnedPasswords):
+
+- **Privacy:** only the first 5 characters of the password's SHA-1 hash leave the server ("k-anonymity"), with response padding turned on so the response size doesn't hint at the result either.
+- **Result:** a found password returns `422 validation_failed` with `password: breached` ("This password has appeared in a data breach. Choose a different one."). It's a field detail like the length rules, not a separate top-level code. This replaces `password_breached` in design.md's code list.
+- **Fails open:** if HIBP doesn't answer within 2 seconds, the check is skipped and logged, rather than blocking sign-ups (design.md §8).
+
+### Abuse until step 8 (Decision)
+
+Rate limiting comes in step 8, but these endpoints can send email to anyone's address. Until then, a simple **cooldown**: each account gets at most one email of each kind per 60 seconds, enforced from `email_tokens`.
+
+- The response is unchanged (`202`), so the cooldown reveals nothing.
+- It stops someone flooding an inbox, or burning through the Resend quota, from a single loop.
+
+### Database
+
+One new migration, `00002_email_tokens.sql` (a new table only, so it's backward compatible):
+
+```
+auth.email_tokens   id, user_id, kind (verify_email|reset_password|change_email),
+                    token_hash, new_email (change_email only), failed_attempts,
+                    expires_at, used_at, created_at
+```
+
+### New error codes
+
+| Code | Status | When |
+|---|---|---|
+| `email_not_verified` | 403 | Login before verifying (verify first mode) |
+| `token_invalid_or_expired` | 422 | Bad, used, or expired email token |
+
+New `details` codes: `breached`, `incorrect`.
+
+### PRs
+
+1. `mail`, `mail/resend`, `mailtest`, `email_tokens`, background sending, `Close`.
+2. Verification and verify first as the default, `AllowUnverifiedLogin`.
+3. Password reset and change, plus the breach check.
+4. Email change.
+
+### Decisions to confirm
+
+1. **Emails are sent in the background** after responding, not through an outbox table; `Close` waits for them on shutdown.
+2. **Plain-text default emails**, overridable per email.
+3. **Tokens go in the link's fragment** (`#token=`), and API confirm endpoints take them in the body.
+4. **Verifying requires the password, then logs the user in.**
+5. **A password reset also verifies the email** and ends all sessions.
+6. **Email change is part of step 4**, and ends all sessions when it completes.
+7. **The breach check is on by default, fails open, and is a field-level `breached` detail.**
+8. **A 60-second per-account cooldown** on sending each kind of email, until step 8.
