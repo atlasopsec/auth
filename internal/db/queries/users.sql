@@ -12,3 +12,9 @@ SELECT * FROM auth.users WHERE lower(email) = lower(@email);
 
 -- name: UpdatePasswordHash :exec
 UPDATE auth.users SET password_hash = @password_hash, updated_at = @now WHERE id = @id;
+
+-- Keeps the original verification time if the email was already verified.
+-- name: MarkEmailVerified :exec
+UPDATE auth.users
+SET email_verified_at = coalesce(email_verified_at, @now), updated_at = @now
+WHERE id = @id;

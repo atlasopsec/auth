@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/atlasopsec/auth/internal/db"
+	"github.com/atlasopsec/auth/internal/emailtoken"
 	"github.com/atlasopsec/auth/internal/httpapi"
 	"github.com/atlasopsec/auth/internal/password"
 	"github.com/atlasopsec/auth/internal/session"
@@ -29,6 +30,8 @@ const maxEmailLength = 254
 func (a *Auth) Register(mux *http.ServeMux) {
 	mux.Handle("POST /v1/users", endpoint(http.HandlerFunc(a.signUp)))
 	mux.Handle("POST /v1/sessions", endpoint(http.HandlerFunc(a.logIn)))
+	mux.Handle("POST /v1/email-verifications", endpoint(http.HandlerFunc(a.requestVerification)))
+	mux.Handle("POST /v1/email-verifications/confirm", endpoint(http.HandlerFunc(a.confirmVerification)))
 	mux.Handle("GET /v1/users/me", endpoint(a.Authenticated(http.HandlerFunc(a.me))))
 	mux.Handle("GET /v1/sessions", endpoint(a.Authenticated(http.HandlerFunc(a.listSessions))))
 	mux.Handle("DELETE /v1/sessions/current", endpoint(a.Authenticated(http.HandlerFunc(a.logOut))))
@@ -85,33 +88,98 @@ func (a *Auth) signUp(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteInternalError(w, r, a.log, err)
 		return
 	}
-	user, tok, s, err := a.createUser(r, req.Email, hash, session.Client(req.Client))
+	created, err := a.createUser(r, req.Email, hash, session.Client(req.Client))
 	if errors.Is(err, errEmailTaken) {
-		httpapi.WriteError(w, r, http.StatusConflict, "email_taken", "An account with this email already exists.", nil)
+		if a.allowUnverified {
+			httpapi.WriteError(w, r, http.StatusConflict, "email_taken", "An account with this email already exists.", nil)
+			return
+		}
+		// Verify first: answer exactly as for a new account, and tell the
+		// address's owner by email instead.
+		if err := a.notifyExistingAccount(r, req.Email); err != nil {
+			httpapi.WriteInternalError(w, r, a.log, err)
+			return
+		}
+		writeVerificationRequired(w, r)
 		return
 	}
 	if err != nil {
 		httpapi.WriteInternalError(w, r, a.log, err)
 		return
 	}
-	a.logEvent(r, "auth: user signed up", user.ID)
-	httpapi.WriteJSON(w, r, http.StatusCreated, loginResponse{User: toUserJSON(user), Token: tok, ExpiresAt: timestamp(s.ExpiresAt)})
+	a.logEvent(r, "auth: user signed up", created.user.ID)
+	a.sendEmail(created.user.Email, a.emails.VerifyEmail, emailtoken.VerifyEmail, created.verifyToken, created.verifyTokenID)
+
+	if !a.allowUnverified {
+		writeVerificationRequired(w, r)
+		return
+	}
+	httpapi.WriteJSON(w, r, http.StatusCreated, loginResponse{
+		User:      toUserJSON(created.user),
+		Token:     created.sessionToken,
+		ExpiresAt: timestamp(created.session.ExpiresAt),
+	})
+}
+
+func writeVerificationRequired(w http.ResponseWriter, r *http.Request) {
+	httpapi.WriteJSON(w, r, http.StatusAccepted, map[string]bool{"verification_required": true})
+}
+
+// notifyExistingAccount handles a verify first sign-up with an email that
+// already has an account. Nothing about the account changes, so a sign-up
+// can't overwrite someone's password. The owner gets a new verification
+// link if they never verified, or otherwise a notice with a password reset
+// link. Within the cooldown nothing is sent, which the response doesn't
+// reveal.
+func (a *Auth) notifyExistingAccount(r *http.Request, email string) error {
+	row, err := a.q.GetUserByEmail(r.Context(), email)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// Deleted since the sign-up failed; nothing to tell anyone.
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("looking up existing account: %w", err)
+	}
+
+	kind, tmpl := emailtoken.ResetPassword, a.emails.SignUpAttempt
+	if row.EmailVerifiedAt == nil {
+		kind, tmpl = emailtoken.VerifyEmail, a.emails.VerifyEmail
+	}
+	tok, t, err := a.tokens.Create(r.Context(), row.ID, kind, "")
+	if errors.Is(err, emailtoken.ErrCooldown) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	a.sendEmail(row.Email, tmpl, kind, tok, t.ID)
+	return nil
 }
 
 var errEmailTaken = errors.New("email taken")
 
-// createUser creates the user, runs OnUserCreated, and starts their first
-// session, all in one transaction.
-func (a *Auth) createUser(r *http.Request, email, hash string, client session.Client) (User, string, session.Session, error) {
+type createdUser struct {
+	user          User
+	verifyToken   string
+	verifyTokenID uuid.UUID
+	// sessionToken and session are set only with AllowUnverifiedLogin.
+	sessionToken string
+	session      session.Session
+}
+
+// createUser creates the user, runs OnUserCreated, creates their email
+// verification token and, with AllowUnverifiedLogin, their first session,
+// all in one transaction.
+func (a *Auth) createUser(r *http.Request, email, hash string, client session.Client) (createdUser, error) {
 	ctx := r.Context()
 	id, err := uuid.NewV7()
 	if err != nil {
-		return User{}, "", session.Session{}, fmt.Errorf("generating user ID: %w", err)
+		return createdUser{}, fmt.Errorf("generating user ID: %w", err)
 	}
 
 	tx, err := a.pool.Begin(ctx)
 	if err != nil {
-		return User{}, "", session.Session{}, fmt.Errorf("beginning sign-up: %w", err)
+		return createdUser{}, fmt.Errorf("beginning sign-up: %w", err)
 	}
 	// After Commit this is a no-op.
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
@@ -123,28 +191,36 @@ func (a *Auth) createUser(r *http.Request, email, hash string, client session.Cl
 		Now:          a.now().UTC().Truncate(time.Microsecond),
 	})
 	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == "23505" && pgErr.ConstraintName == "idx_users_email" {
-		return User{}, "", session.Session{}, errEmailTaken
+		return createdUser{}, errEmailTaken
 	}
 	if err != nil {
-		return User{}, "", session.Session{}, fmt.Errorf("creating user: %w", err)
+		return createdUser{}, fmt.Errorf("creating user: %w", err)
 	}
-	user := userFromRow(row)
+	c := createdUser{user: userFromRow(row)}
 
 	if a.hooks.OnUserCreated != nil {
-		if err := a.hooks.OnUserCreated(ctx, tx, user); err != nil {
-			return User{}, "", session.Session{}, fmt.Errorf("OnUserCreated hook: %w", err)
+		if err := a.hooks.OnUserCreated(ctx, tx, c.user); err != nil {
+			return createdUser{}, fmt.Errorf("OnUserCreated hook: %w", err)
 		}
 	}
 
-	ip, ua := httpapi.Client(r, a.trusted)
-	tok, s, err := session.NewManager(tx, a.now).Create(ctx, user.ID, session.Meta{Client: client, IP: ip, UserAgent: ua}, session.Standard)
+	tok, t, err := emailtoken.NewManager(tx, a.now).Create(ctx, c.user.ID, emailtoken.VerifyEmail, "")
 	if err != nil {
-		return User{}, "", session.Session{}, err
+		return createdUser{}, err
+	}
+	c.verifyToken, c.verifyTokenID = tok, t.ID
+
+	if a.allowUnverified {
+		ip, ua := httpapi.Client(r, a.trusted)
+		c.sessionToken, c.session, err = session.NewManager(tx, a.now).Create(ctx, c.user.ID, session.Meta{Client: client, IP: ip, UserAgent: ua}, session.Standard)
+		if err != nil {
+			return createdUser{}, err
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return User{}, "", session.Session{}, fmt.Errorf("committing sign-up: %w", err)
+		return createdUser{}, fmt.Errorf("committing sign-up: %w", err)
 	}
-	return user, tok, s, nil
+	return c, nil
 }
 
 func (a *Auth) logIn(w http.ResponseWriter, r *http.Request) {
@@ -193,6 +269,12 @@ func (a *Auth) logIn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.rehashIfNeeded(r, row, req.Password)
+	if row.EmailVerifiedAt == nil && !a.allowUnverified {
+		// Only reached with the correct password, so this reveals nothing
+		// to someone who doesn't already know it.
+		httpapi.WriteError(w, r, http.StatusForbidden, "email_not_verified", "Verify your email address to log in. Check your inbox for the link.", nil)
+		return
+	}
 
 	ip, ua := httpapi.Client(r, a.trusted)
 	tok, s, err := a.sessions.Create(r.Context(), row.ID, session.Meta{Client: session.Client(req.Client), IP: ip, UserAgent: ua}, session.Standard)

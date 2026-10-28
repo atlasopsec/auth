@@ -86,6 +86,12 @@ func (s *Sender) deliver(msg mail.Message) {
 	}
 }
 
+// Wait blocks until every message accepted so far has been sent or has
+// failed its last retry. It's for tests; servers use Close.
+func (s *Sender) Wait() {
+	s.wg.Wait()
+}
+
 // ErrClosed is returned by Close if it was already called.
 var ErrClosed = errors.New("sender: already closed")
 
