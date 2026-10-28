@@ -2,7 +2,7 @@
 
 The module's public Go API and the HTTP endpoints it serves.
 
-> **Status:** §1–7 (build steps 3–5) are approved and built. §8 (build step 6: two-factor authentication) is a **sketch for review**; its **(Decision)** items need sign-off before code is written. Sections marked **(Decision)** in §1–7 were confirmed in review.
+> **Status: approved.** §1–7 cover build steps 3–5 (built). §8 covers build step 6 (two-factor authentication), approved and being built. Sections marked **(Decision)** were confirmed in review. Later steps (OAuth) add to this but don't change what's here.
 
 Once a name below is released, changing or removing it is a breaking change (a new major version), so this is the moment to get it right.
 
@@ -697,7 +697,7 @@ Confirmed in review on 2026-10-28:
 
 ---
 
-## 8. Step 6: two-factor authentication (sketch for review)
+## 8. Step 6: two-factor authentication
 
 Step 6 adds 2FA from the [auth standard](https://github.com/jakefrenzel/engineering-standards/blob/main/standards/auth.md) §6:
 - **TOTP** (authenticator apps like 1Password or Google Authenticator), implemented in-house per design.md decision 5.
@@ -794,6 +794,30 @@ Rate limiting arrives in step 8. Until then, someone who already has the passwor
 - **It's a temporary pause, not a lockout,** in line with the standard's "slow down, don't lock out".
 - **The user is emailed when it trips:** "someone entered your password correctly but not your 2FA code; change your password". By then someone has their password.
 
+### Password reset with 2FA (Decision)
+
+A reset never logs anyone in, so it can't get past 2FA: the next login asks for a code either way. On top of that, **when 2FA is on, finishing a reset also takes a code**, so someone with access only to the user's inbox can't change their password (and log them out everywhere) either.
+
+```json
+POST /v1/password-resets/confirm
+{ "token": "…", "password": "…", "code": "123456" }
+```
+
+- **Without a code,** the response is `422 validation_failed` with `code: required`, and nothing changes. The reset page then shows a code field and sends again.
+- **A wrong code** returns `401 invalid_two_factor_code`. It counts toward the guessing limit above and toward the reset link's 5 failed attempts, like wrong passwords on a verification link.
+- **A recovery code works here too,** for a user who has lost their phone.
+
+**A user who has lost both their phone and their recovery codes** can't recover the account by themselves; otherwise 2FA wouldn't protect anything. For that case:
+
+```go
+// ResetTwoFactor turns off a user's 2FA and ends all their sessions. It's
+// for admin tooling and support, after confirming who the user is some
+// other way. There's no endpoint for it.
+func (a *Auth) ResetTwoFactor(ctx context.Context, userID uuid.UUID) error
+```
+
+The user is emailed that 2FA was turned off. If 2FA is required for them, they're asked to set it up again at their next login.
+
 ### Notices
 
 Users are emailed when 2FA is turned on or off, when recovery codes are regenerated, and when a recovery code is used (with how many are left). The standard says users SHOULD be told about new 2FA settings. The four templates join `Emails`.
@@ -824,10 +848,12 @@ auth.two_factor_challenges   id, user_id, token_hash, client, ip, user_agent,
 ### PRs
 
 1. `internal/totp` (with RFC 6238's test vectors), encryption, the schema, and the setup, confirm, disable and regenerate endpoints.
-2. The login challenge, verifying codes, recovery codes at login, the guessing limit, and the notices.
+2. The login challenge, verifying codes, recovery codes at login, the guessing limit, the notices, the code on password reset, and `ResetTwoFactor`.
 3. Required 2FA (`TwoFactorRoles`, `SetTwoFactorRequired`), the setup-only restriction, and 12-hour privileged sessions.
 
-### Decisions to confirm
+### Decisions
+
+Confirmed in review on 2026-10-28:
 
 1. **`EncryptionKey` is required for every project.** AES-256-GCM, the user ID bound in, and a key ID for future rotation.
 2. **Login with 2FA returns a secret challenge token,** which works for 5 minutes and 5 wrong codes. Codes are allowed ±30 s and are never reused.
@@ -836,3 +862,4 @@ auth.two_factor_challenges   id, user_id, token_hash, client, ip, user_agent,
 5. **Privileged sessions last 12 hours, checked on every request.**
 6. **10 wrong codes in 15 minutes pauses challenges for that user,** and emails them.
 7. **The verification link returns a challenge, not a session, when 2FA is on.**
+8. **Finishing a password reset takes a 2FA code (or recovery code) when 2FA is on.** `ResetTwoFactor` is for users who've lost both.
