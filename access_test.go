@@ -336,7 +336,7 @@ func TestNewValidatesRoles(t *testing.T) {
 	t.Parallel()
 	pool := testdb.New(t)
 	base := func() Config {
-		return Config{DB: pool, Mailer: &mailtest.Recorder{}, AppURL: testAppURL, AppName: "Example"}
+		return Config{DB: pool, Mailer: &mailtest.Recorder{}, AppURL: testAppURL, AppName: "Example", EncryptionKey: testEncryptionKey}
 	}
 	bad := map[string]func(*Config){
 		"org roles without owner": func(c *Config) { c.OrgRoles = rbac.Roles{"admin": {"invoices:read"}} },

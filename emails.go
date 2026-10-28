@@ -34,6 +34,11 @@ type Emails struct {
 	EmailChanged func(EmailData) (subject, text, html string)
 	// Invitation invites someone to join an organization. OrgName is set.
 	Invitation func(EmailData) (subject, text, html string)
+	// TwoFactorEnabled, TwoFactorDisabled, and RecoveryCodesRegenerated
+	// tell a user about changes to their 2FA. Link is empty.
+	TwoFactorEnabled         func(EmailData) (subject, text, html string)
+	TwoFactorDisabled        func(EmailData) (subject, text, html string)
+	RecoveryCodesRegenerated func(EmailData) (subject, text, html string)
 }
 
 // EmailData is what an email template can use.
@@ -125,6 +130,33 @@ func defaultInvitation(d EmailData) (string, string, string) {
 
 The invitation works for %s. If you weren't expecting it, you can ignore this email.
 `, d.OrgName, d.AppName, d.Link, humanDuration(d.ExpiresIn)),
+		""
+}
+
+func defaultTwoFactorEnabled(d EmailData) (string, string, string) {
+	return "Two-factor authentication is on for your " + d.AppName + " account",
+		fmt.Sprintf(`Two-factor authentication was just turned on for your %s account. Logging in now also needs a code from your authenticator app.
+
+Keep your recovery codes somewhere safe. If you didn't do this, reset your password now at %s/reset-password.
+`, d.AppName, d.AppURL),
+		""
+}
+
+func defaultTwoFactorDisabled(d EmailData) (string, string, string) {
+	return "Two-factor authentication is off for your " + d.AppName + " account",
+		fmt.Sprintf(`Two-factor authentication was just turned off for your %s account. Logging in now needs only your password.
+
+If you didn't do this, reset your password now at %s/reset-password, then turn two-factor authentication back on.
+`, d.AppName, d.AppURL),
+		""
+}
+
+func defaultRecoveryCodesRegenerated(d EmailData) (string, string, string) {
+	return "New recovery codes for your " + d.AppName + " account",
+		fmt.Sprintf(`New two-factor recovery codes were just created for your %s account. The old ones no longer work.
+
+If you didn't do this, reset your password now at %s/reset-password.
+`, d.AppName, d.AppURL),
 		""
 }
 

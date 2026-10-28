@@ -363,7 +363,7 @@ func TestBreachCheckFailsOpen(t *testing.T) {
 func TestDisableBreachCheck(t *testing.T) {
 	t.Parallel()
 	pool := testdb.New(t)
-	cfg := Config{DB: pool, Mailer: &mailtest.Recorder{}, AppURL: testAppURL, AppName: "Example"}
+	cfg := Config{DB: pool, Mailer: &mailtest.Recorder{}, AppURL: testAppURL, AppName: "Example", EncryptionKey: testEncryptionKey}
 	on, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)

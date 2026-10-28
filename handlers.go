@@ -38,6 +38,7 @@ func (a *Auth) Register(mux *http.ServeMux) {
 	mux.Handle("POST /v1/email-changes", endpoint(a.Authenticated(http.HandlerFunc(a.requestEmailChange))))
 	mux.Handle("POST /v1/email-changes/confirm", endpoint(http.HandlerFunc(a.confirmEmailChange)))
 	a.registerOrganizations(mux)
+	a.registerTwoFactor(mux)
 	mux.Handle("GET /v1/users/me", endpoint(a.Authenticated(http.HandlerFunc(a.me))))
 	mux.Handle("GET /v1/sessions", endpoint(a.Authenticated(http.HandlerFunc(a.listSessions))))
 	mux.Handle("DELETE /v1/sessions/current", endpoint(a.Authenticated(http.HandlerFunc(a.logOut))))
@@ -320,9 +321,21 @@ func (a *Auth) rehashIfNeeded(r *http.Request, row db.AuthUser, pw string) {
 	}
 }
 
+// meJSON is the logged-in user, with their 2FA status.
+type meJSON struct {
+	userJSON
+	TwoFactorEnabled  bool `json:"two_factor_enabled"`
+	TwoFactorRequired bool `json:"two_factor_required"`
+}
+
 func (a *Auth) me(w http.ResponseWriter, r *http.Request) {
 	c, _ := currentFrom(r.Context())
-	httpapi.WriteJSON(w, r, http.StatusOK, toUserJSON(c.user))
+	status, err := a.twoFactorStatus(r.Context(), c.user.ID)
+	if err != nil {
+		httpapi.WriteInternalError(w, r, a.log, err)
+		return
+	}
+	httpapi.WriteJSON(w, r, http.StatusOK, meJSON{userJSON: toUserJSON(c.user), TwoFactorEnabled: status.enabled, TwoFactorRequired: status.required})
 }
 
 type sessionJSON struct {

@@ -53,6 +53,15 @@ type AuthOrganization struct {
 	UpdatedAt time.Time
 }
 
+type AuthRecoveryCode struct {
+	ID        uuid.UUID
+	UserID    uuid.UUID
+	CodeHash  []byte
+	UsedAt    *time.Time
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
 type AuthSession struct {
 	ID                uuid.UUID
 	UserID            uuid.UUID
@@ -65,6 +74,15 @@ type AuthSession struct {
 	AbsoluteExpiresAt time.Time
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
+}
+
+type AuthTotpSecret struct {
+	UserID          uuid.UUID
+	SecretEncrypted []byte
+	LastUsedStep    int64
+	ConfirmedAt     *time.Time
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 type AuthUser struct {

@@ -21,6 +21,16 @@ Built for Go APIs that own their own Postgres database, with Next.js web apps an
 
 The design follows the auth standard in [`jakefrenzel/engineering-standards`](https://github.com/jakefrenzel/engineering-standards).
 
+## Encryption key
+
+Every project needs an `AUTH_ENCRYPTION_KEY`: 32 random bytes, base64-encoded, passed as `Config.EncryptionKey`. It encrypts users' 2FA secrets.
+
+```sh
+openssl rand -base64 32
+```
+
+Keep it in Railway's variables with the other secrets, and **back it up**. If it's lost, every user who has 2FA on has to set it up again.
+
 ## Design
 
 How the module is structured and how projects use it: [docs/design.md](docs/design.md). The public Go API and HTTP endpoints: [docs/api.md](docs/api.md).

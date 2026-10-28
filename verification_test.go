@@ -432,11 +432,12 @@ func TestWriterMailerWarns(t *testing.T) {
 	t.Parallel()
 	var buf syncBuffer
 	_, err := New(Config{
-		DB:      testdb.New(t),
-		Mailer:  mail.NewWriter(&buf),
-		AppURL:  "http://localhost:3000",
-		AppName: "Example",
-		Logger:  slog.New(slog.NewTextHandler(&buf, nil)),
+		DB:            testdb.New(t),
+		Mailer:        mail.NewWriter(&buf),
+		AppURL:        "http://localhost:3000",
+		AppName:       "Example",
+		EncryptionKey: testEncryptionKey,
+		Logger:        slog.New(slog.NewTextHandler(&buf, nil)),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -480,7 +481,7 @@ func TestEveryEmailCanBeCustomized(t *testing.T) {
 		return func(EmailData) (string, string, string) { return name, "", "" }
 	}
 	a, err := New(Config{
-		DB: testdb.New(t), Mailer: &mailtest.Recorder{}, AppURL: testAppURL, AppName: "Example",
+		DB: testdb.New(t), Mailer: &mailtest.Recorder{}, AppURL: testAppURL, AppName: "Example", EncryptionKey: testEncryptionKey,
 		Emails: Emails{
 			VerifyEmail:     custom("VerifyEmail"),
 			SignUpAttempt:   custom("SignUpAttempt"),

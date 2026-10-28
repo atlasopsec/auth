@@ -16,14 +16,15 @@ import (
 	"github.com/atlasopsec/auth/internal/db"
 	"github.com/atlasopsec/auth/internal/emailtoken"
 	"github.com/atlasopsec/auth/internal/pwned"
+	"github.com/atlasopsec/auth/internal/secretbox"
 	"github.com/atlasopsec/auth/internal/sender"
 	"github.com/atlasopsec/auth/internal/session"
 	"github.com/atlasopsec/auth/mail"
 	"github.com/atlasopsec/auth/rbac"
 )
 
-// Config configures the module. DB, Mailer, AppURL, and AppName are
-// required.
+// Config configures the module. DB, Mailer, AppURL, AppName, and
+// EncryptionKey are required.
 type Config struct {
 	// DB is the project's Postgres pool. Run Migrate on it first.
 	DB *pgxpool.Pool
@@ -52,8 +53,15 @@ type Config struct {
 	// localhost.
 	AppURL string
 
-	// AppName appears in email subjects and text, e.g. "Acme". Required.
+	// AppName appears in email subjects and text, e.g. "Acme", and as the
+	// issuer in authenticator apps. Required.
 	AppName string
+
+	// EncryptionKey encrypts 2FA secrets: 32 random bytes, base64-encoded,
+	// from an environment variable such as AUTH_ENCRYPTION_KEY. Generate one
+	// with `openssl rand -base64 32`. Required. Keep a backup: if it's lost,
+	// every user has to set up 2FA again.
+	EncryptionKey string
 
 	// AllowUnverifiedLogin lets users log in before verifying their email,
 	// and makes sign-up log them in immediately. Off by default: new users
@@ -114,6 +122,7 @@ type Auth struct {
 	appName         string
 	allowUnverified bool
 	emails          Emails
+	box             *secretbox.Box
 	// breach is nil when the breach check is disabled.
 	breach             breachChecker
 	orgRoles           rbac.Roles
@@ -142,6 +151,10 @@ func New(cfg Config) (*Auth, error) {
 	if err != nil {
 		return nil, err
 	}
+	box, err := secretbox.New(cfg.EncryptionKey)
+	if err != nil {
+		return nil, fmt.Errorf("auth: Config.EncryptionKey: %w", err)
+	}
 	for _, p := range cfg.TrustedProxies {
 		if !p.IsValid() {
 			return nil, fmt.Errorf("auth: invalid trusted proxy prefix %v", p)
@@ -164,6 +177,7 @@ func New(cfg Config) (*Auth, error) {
 		log:             cfg.Logger,
 		now:             cfg.Now,
 		appURL:          appURL,
+		box:             box,
 		appName:         cfg.AppName,
 		allowUnverified: cfg.AllowUnverifiedLogin,
 		emails:          cfg.Emails,
@@ -198,6 +212,15 @@ func New(cfg Config) (*Auth, error) {
 	}
 	if a.emails.Invitation == nil {
 		a.emails.Invitation = defaultInvitation
+	}
+	if a.emails.TwoFactorEnabled == nil {
+		a.emails.TwoFactorEnabled = defaultTwoFactorEnabled
+	}
+	if a.emails.TwoFactorDisabled == nil {
+		a.emails.TwoFactorDisabled = defaultTwoFactorDisabled
+	}
+	if a.emails.RecoveryCodesRegenerated == nil {
+		a.emails.RecoveryCodesRegenerated = defaultRecoveryCodesRegenerated
 	}
 	if !cfg.DisableBreachCheck {
 		a.breach = pwned.New(pwned.DefaultURL)
