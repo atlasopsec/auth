@@ -47,10 +47,10 @@ func (a *Auth) Register(mux *http.ServeMux) {
 // endpoint adds what every module endpoint needs. Responses carry tokens
 // and account details, so nothing may cache them.
 func endpoint(h http.Handler) http.Handler {
-	return httpapi.WithRequestID(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return guarded{httpapi.WithRequestID(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		h.ServeHTTP(w, r)
-	}))
+	}))}
 }
 
 type credentialsRequest struct {

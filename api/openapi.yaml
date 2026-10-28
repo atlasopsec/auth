@@ -479,7 +479,33 @@ components:
                     enum: [required, invalid_format, invalid_value, too_short, too_long, breached, incorrect, unchanged]
                   message: { type: string }
 
+  parameters:
+    OrganizationID:
+      name: X-Organization-ID
+      in: header
+      required: true
+      description: >
+        The organization the request is for. Required on every route behind
+        `RequireOrg`; projects reference this parameter from their own API
+        docs. A missing or malformed value returns `400 bad_request`, and an
+        organization the user isn't a member of returns `404 not_found`.
+      schema: { type: string, format: uuid }
+
   responses:
+    Forbidden:
+      description: >
+        `forbidden`: logged in, but the user's role doesn't grant the
+        permission the route requires (`Require` or `RequireOrg`).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: >
+        `not_found`: doesn't exist, or the user isn't allowed to know it
+        exists (e.g. an organization they aren't a member of).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
     BadRequest:
       description: "`bad_request`: malformed JSON, wrong types, or unknown fields."
       content:
