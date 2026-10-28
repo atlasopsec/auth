@@ -283,6 +283,81 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
         "500": { $ref: "#/components/responses/InternalError" }
 
+  /v1/email-changes:
+    post:
+      operationId: requestEmailChange
+      summary: Start changing my email
+      description: >
+        Requires the current password and a verified email. Sends a
+        confirmation link to the new address. Answers `202` even if the new
+        address belongs to another account; that account's owner is emailed
+        instead. At most one link a minute.
+      tags: [email-changes]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [email, current_password]
+              properties:
+                email: { type: string, maxLength: 254 }
+                current_password: { type: string }
+      responses:
+        "202": { description: Accepted. }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403":
+          description: "`email_not_verified`: verify the current email first."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "422":
+          description: >
+            `validation_failed`: `email` is `required`, `too_long`,
+            `invalid_format`, or `unchanged`, or `current_password` is
+            `required` or `incorrect`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /v1/email-changes/confirm:
+    post:
+      operationId: confirmEmailChange
+      summary: Finish changing my email
+      description: >
+        Takes the token from the link sent to the new address (the part
+        after `#token=`). Switches the email, ends every session, cancels
+        links sent to the old address, and emails the old address.
+      tags: [email-changes]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [token]
+              properties:
+                token: { type: string }
+      responses:
+        "204": { description: Email changed. }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "422":
+          description: >
+            `token_invalid_or_expired` for a bad, used, or expired token, or
+            if the address was taken since the link was sent;
+            `validation_failed` for a missing token.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
   /v1/sessions/current:
     delete:
       operationId: logOut
@@ -401,7 +476,7 @@ components:
                   field: { type: string }
                   code:
                     type: string
-                    enum: [required, invalid_format, invalid_value, too_short, too_long, breached, incorrect]
+                    enum: [required, invalid_format, invalid_value, too_short, too_long, breached, incorrect, unchanged]
                   message: { type: string }
 
   responses:

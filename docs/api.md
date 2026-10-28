@@ -376,6 +376,7 @@ Links point at the **Next.js app** (the Go API isn't public), with the token aft
 ```
 https://app.example.com/verify-email#token=q3J…
 https://app.example.com/reset-password#token=q3J…
+https://app.example.com/confirm-email-change#token=q3J…
 ```
 
 - Browsers never send the fragment to servers, so tokens stay out of Railway's access logs, analytics, and `Referer` headers. A query string (`?token=`) would leak into all three.
@@ -500,7 +501,7 @@ auth.email_tokens   id, user_id, kind (verify_email|reset_password|change_email)
 | `email_not_verified` | 403 | Login before verifying (verify first mode) |
 | `token_invalid_or_expired` | 422 | Bad, used, or expired email token |
 
-New `details` codes: `breached`, `incorrect`.
+New `details` codes: `breached`, `incorrect`, and `unchanged` (an email change to the current address).
 
 ### PRs
 
