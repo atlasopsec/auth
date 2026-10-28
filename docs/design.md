@@ -155,8 +155,9 @@ auth.rate_limits        key, window_start, count
 | `DELETE /v1/sessions/current` | Log out | Session |
 | `DELETE /v1/sessions/{id}` | End one of my other sessions | Session |
 | `DELETE /v1/sessions` | Log out everywhere | Session |
-| `POST /v1/email-verifications` / `.../{token}/confirm` | Send / confirm email verification. Sending takes an email and always returns `202`, like password reset, so it works before the user can log in | Public |
-| `POST /v1/password-resets` / `.../{token}/confirm` | Request / complete password reset | Public |
+| `POST /v1/email-verifications` / `.../confirm` | Send / confirm email verification. Sending takes an email and always returns `202`, like password reset, so it works before the user can log in. Confirming takes the token and password in the body (see api.md §6) | Public |
+| `POST /v1/password-resets` / `.../confirm` | Request / complete password reset. The token goes in the body, never the path | Public |
+| `POST /v1/email-changes` / `.../confirm` | Start / finish changing email | Session / Public |
 | `POST /v1/users/me/password` | Change password (requires current password) | Session |
 | `POST /v1/users/me/two-factor` / `.../confirm` / `DELETE` | Set up, confirm, turn off 2FA | Session |
 | `GET /v1/oauth/{provider}/start` / `POST .../callback` | Sign in with Google, GitHub, Apple | Public |
@@ -172,7 +173,7 @@ Next.js puts it in the cookie; mobile puts it in secure storage. The module neve
 
 ### Error codes
 
-All errors use the standard format. The module's stable codes include: `invalid_credentials`, `email_taken`, `email_not_verified`, `two_factor_required`, `invalid_two_factor_code`, `session_expired`, `unauthenticated`, `forbidden`, `token_invalid_or_expired`, `password_too_weak`, `password_breached`, `oauth_failed`, `rate_limited`.
+All errors use the standard format. The module's stable codes include: `invalid_credentials`, `email_taken`, `email_not_verified`, `two_factor_required`, `invalid_two_factor_code`, `session_expired`, `unauthenticated`, `forbidden`, `token_invalid_or_expired`, `oauth_failed`, `rate_limited`.
 
 ## 6. Roles and permissions
 
@@ -248,7 +249,7 @@ Each step is one or more small PRs:
 1. `internal/token` and `internal/password`
 2. Migrations, `internal/db`, `internal/session`
 3. `auth.New`, `Require`, `UserFrom`, plus sign up, log in, log out, sessions endpoints, and the error format
-4. Email verification, password reset, password change, `auth/mail`, `auth/mail/resend`
+4. Email verification, password reset, password change, email change, `auth/mail`, `auth/mail/resend`
 5. RBAC: `auth/rbac`, organizations, memberships, `CheckRoutes`
 6. 2FA (TOTP, recovery codes, challenges)
 7. OAuth (Google, GitHub, Apple)
