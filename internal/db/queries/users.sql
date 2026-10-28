@@ -18,3 +18,8 @@ UPDATE auth.users SET password_hash = @password_hash, updated_at = @now WHERE id
 UPDATE auth.users
 SET email_verified_at = coalesce(email_verified_at, @now), updated_at = @now
 WHERE id = @id;
+
+-- name: UpdateUserEmail :exec
+UPDATE auth.users
+SET email = @email, email_verified_at = @now, updated_at = @now
+WHERE id = @id;

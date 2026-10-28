@@ -21,7 +21,8 @@ import (
 	"github.com/atlasopsec/auth/mail"
 )
 
-// Config configures the module. Only DB is required.
+// Config configures the module. DB, Mailer, AppURL, and AppName are
+// required.
 type Config struct {
 	// DB is the project's Postgres pool. Run Migrate on it first.
 	DB *pgxpool.Pool
@@ -157,6 +158,12 @@ func New(cfg Config) (*Auth, error) {
 	}
 	if a.emails.PasswordChanged == nil {
 		a.emails.PasswordChanged = defaultPasswordChanged
+	}
+	if a.emails.EmailChange == nil {
+		a.emails.EmailChange = defaultEmailChange
+	}
+	if a.emails.EmailChanged == nil {
+		a.emails.EmailChanged = defaultEmailChanged
 	}
 	if !cfg.DisableBreachCheck {
 		a.breach = pwned.New(pwned.DefaultURL)

@@ -84,6 +84,15 @@ func (q *Queries) DeleteUnusedEmailTokens(ctx context.Context, arg DeleteUnusedE
 	return err
 }
 
+const deleteUnusedUserEmailTokens = `-- name: DeleteUnusedUserEmailTokens :exec
+DELETE FROM auth.email_tokens WHERE user_id = $1 AND used_at IS NULL
+`
+
+func (q *Queries) DeleteUnusedUserEmailTokens(ctx context.Context, userID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, deleteUnusedUserEmailTokens, userID)
+	return err
+}
+
 const getEmailTokenByHash = `-- name: GetEmailTokenByHash :one
 SELECT id, user_id, kind, token_hash, new_email, failed_attempts, expires_at, used_at, created_at, updated_at FROM auth.email_tokens WHERE token_hash = $1 AND kind = $2
 `

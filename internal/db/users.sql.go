@@ -115,3 +115,20 @@ func (q *Queries) UpdatePasswordHash(ctx context.Context, arg UpdatePasswordHash
 	_, err := q.db.Exec(ctx, updatePasswordHash, arg.PasswordHash, arg.Now, arg.ID)
 	return err
 }
+
+const updateUserEmail = `-- name: UpdateUserEmail :exec
+UPDATE auth.users
+SET email = $1, email_verified_at = $2, updated_at = $2
+WHERE id = $3
+`
+
+type UpdateUserEmailParams struct {
+	Email string
+	Now   *time.Time
+	ID    uuid.UUID
+}
+
+func (q *Queries) UpdateUserEmail(ctx context.Context, arg UpdateUserEmailParams) error {
+	_, err := q.db.Exec(ctx, updateUserEmail, arg.Email, arg.Now, arg.ID)
+	return err
+}

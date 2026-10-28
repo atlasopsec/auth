@@ -19,6 +19,7 @@ import (
 	"github.com/atlasopsec/auth/internal/testdb"
 	"github.com/atlasopsec/auth/internal/token"
 	"github.com/atlasopsec/auth/mail"
+	"github.com/atlasopsec/auth/mail/mailtest"
 )
 
 // verifyFirst returns a fixture with the default behavior: verify first.
@@ -469,6 +470,39 @@ func TestHumanDuration(t *testing.T) {
 	} {
 		if got := humanDuration(d); got != want {
 			t.Errorf("humanDuration(%v) = %q, want %q", d, got, want)
+		}
+	}
+}
+
+func TestEveryEmailCanBeCustomized(t *testing.T) {
+	t.Parallel()
+	custom := func(name string) func(EmailData) (string, string, string) {
+		return func(EmailData) (string, string, string) { return name, "", "" }
+	}
+	a, err := New(Config{
+		DB: testdb.New(t), Mailer: &mailtest.Recorder{}, AppURL: testAppURL, AppName: "Example",
+		Emails: Emails{
+			VerifyEmail:     custom("VerifyEmail"),
+			SignUpAttempt:   custom("SignUpAttempt"),
+			PasswordReset:   custom("PasswordReset"),
+			PasswordChanged: custom("PasswordChanged"),
+			EmailChange:     custom("EmailChange"),
+			EmailChanged:    custom("EmailChanged"),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, tmpl := range map[string]func(EmailData) (string, string, string){
+		"VerifyEmail":     a.emails.VerifyEmail,
+		"SignUpAttempt":   a.emails.SignUpAttempt,
+		"PasswordReset":   a.emails.PasswordReset,
+		"PasswordChanged": a.emails.PasswordChanged,
+		"EmailChange":     a.emails.EmailChange,
+		"EmailChanged":    a.emails.EmailChanged,
+	} {
+		if subject, _, _ := tmpl(EmailData{}); subject != name {
+			t.Errorf("%s uses the default template, want the custom one", name)
 		}
 	}
 }

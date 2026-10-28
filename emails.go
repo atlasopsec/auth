@@ -26,6 +26,12 @@ type Emails struct {
 	// PasswordChanged tells a user their password was changed or reset.
 	// Link is empty.
 	PasswordChanged func(EmailData) (subject, text, html string)
+	// EmailChange asks a user to confirm a new address. It's sent to the
+	// new address.
+	EmailChange func(EmailData) (subject, text, html string)
+	// EmailChanged tells the old address that the account's email was
+	// changed. Link is empty.
+	EmailChanged func(EmailData) (subject, text, html string)
 }
 
 // EmailData is what an email template can use.
@@ -87,6 +93,26 @@ If you did this, you can ignore this email. If you didn't, reset your password n
 		""
 }
 
+func defaultEmailChange(d EmailData) (string, string, string) {
+	return "Confirm your new email for " + d.AppName,
+		fmt.Sprintf(`Someone asked to change the email address of a %s account to this one. To confirm, open this link:
+
+%s
+
+The link works for %s. If you didn't ask for this, you can ignore this email.
+`, d.AppName, d.Link, humanDuration(d.ExpiresIn)),
+		""
+}
+
+func defaultEmailChanged(d EmailData) (string, string, string) {
+	return "Your " + d.AppName + " email was changed",
+		fmt.Sprintf(`The email address of your %s account was just changed, so emails about it will no longer come here. Everyone was logged out of the account.
+
+If you didn't do this, contact %s support right away: someone else may have taken over your account.
+`, d.AppName, d.AppName),
+		""
+}
+
 // humanDuration writes the token lifetimes used in emails: "30 minutes",
 // "1 hour", "24 hours".
 func humanDuration(d time.Duration) string {
@@ -106,6 +132,7 @@ func humanDuration(d time.Duration) string {
 var linkPaths = map[emailtoken.Kind]string{
 	emailtoken.VerifyEmail:   "/verify-email",
 	emailtoken.ResetPassword: "/reset-password",
+	emailtoken.ChangeEmail:   "/confirm-email-change",
 }
 
 // link builds an email link. The token goes in the fragment, which
