@@ -32,6 +32,9 @@ func (a *Auth) Register(mux *http.ServeMux) {
 	mux.Handle("POST /v1/sessions", endpoint(http.HandlerFunc(a.logIn)))
 	mux.Handle("POST /v1/email-verifications", endpoint(http.HandlerFunc(a.requestVerification)))
 	mux.Handle("POST /v1/email-verifications/confirm", endpoint(http.HandlerFunc(a.confirmVerification)))
+	mux.Handle("POST /v1/password-resets", endpoint(http.HandlerFunc(a.requestPasswordReset)))
+	mux.Handle("POST /v1/password-resets/confirm", endpoint(http.HandlerFunc(a.confirmPasswordReset)))
+	mux.Handle("POST /v1/users/me/password", endpoint(a.Authenticated(http.HandlerFunc(a.changePassword))))
 	mux.Handle("GET /v1/users/me", endpoint(a.Authenticated(http.HandlerFunc(a.me))))
 	mux.Handle("GET /v1/sessions", endpoint(a.Authenticated(http.HandlerFunc(a.listSessions))))
 	mux.Handle("DELETE /v1/sessions/current", endpoint(a.Authenticated(http.HandlerFunc(a.logOut))))
@@ -80,6 +83,10 @@ func (a *Auth) signUp(w http.ResponseWriter, r *http.Request) {
 	}
 	if details != nil {
 		writeValidationFailed(w, r, details)
+		return
+	}
+	if fe, ok := a.checkBreached(r, "password", req.Password); !ok {
+		writeValidationFailed(w, r, []httpapi.FieldError{fe})
 		return
 	}
 
