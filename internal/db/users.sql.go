@@ -84,6 +84,23 @@ func (q *Queries) GetUserByID(ctx context.Context, id uuid.UUID) (AuthUser, erro
 	return i, err
 }
 
+const markEmailVerified = `-- name: MarkEmailVerified :exec
+UPDATE auth.users
+SET email_verified_at = coalesce(email_verified_at, $1), updated_at = $1
+WHERE id = $2
+`
+
+type MarkEmailVerifiedParams struct {
+	Now time.Time
+	ID  uuid.UUID
+}
+
+// Keeps the original verification time if the email was already verified.
+func (q *Queries) MarkEmailVerified(ctx context.Context, arg MarkEmailVerifiedParams) error {
+	_, err := q.db.Exec(ctx, markEmailVerified, arg.Now, arg.ID)
+	return err
+}
+
 const updatePasswordHash = `-- name: UpdatePasswordHash :exec
 UPDATE auth.users SET password_hash = $1, updated_at = $2 WHERE id = $3
 `

@@ -363,6 +363,7 @@ type Emails struct {
 
 type EmailData struct {
 	AppName   string
+	AppURL    string        // for links without a token, e.g. AppURL + "/reset-password"
 	Link      string        // empty for notices
 	ExpiresIn time.Duration // how long Link works
 }

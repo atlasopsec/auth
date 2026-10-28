@@ -23,6 +23,8 @@ import (
 	"github.com/atlasopsec/auth/internal/password"
 	"github.com/atlasopsec/auth/internal/testdb"
 	"github.com/atlasopsec/auth/internal/token"
+	"github.com/atlasopsec/auth/mail"
+	"github.com/atlasopsec/auth/mail/mailtest"
 )
 
 const (
@@ -73,26 +75,43 @@ type fixture struct {
 	auth  *Auth
 	mux   *http.ServeMux
 	logs  *syncBuffer
+	mail  *mailtest.Recorder
 }
 
 // proxyAddr is the test Next.js server, trusted to forward client details.
 const proxyAddr = "10.0.0.5:4000"
 
+// setup returns a fixture in the step 3 behavior, where sign-up logs the
+// user in immediately (AllowUnverifiedLogin).
 func setup(t *testing.T, hooks Hooks) fixture {
+	t.Helper()
+	return setupWith(t, Config{Hooks: hooks, AllowUnverifiedLogin: true})
+}
+
+// setupWith returns a fixture using cfg, with the database, clock, logger,
+// mailer, and app details filled in.
+func setupWith(t *testing.T, cfg Config) fixture {
 	t.Helper()
 	pool := testdb.NewMigrated(t)
 	c := &clock{t: time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)}
 	logs := &syncBuffer{}
-	a, err := New(Config{
-		DB:             pool,
-		TrustedProxies: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")},
-		Hooks:          hooks,
-		Logger:         slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
-		Now:            c.now,
-	})
+	rec := &mailtest.Recorder{}
+	cfg.DB = pool
+	cfg.TrustedProxies = []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}
+	cfg.Logger = slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	cfg.Now = c.now
+	cfg.Mailer = rec
+	cfg.AppURL = testAppURL
+	cfg.AppName = "Example"
+	a, err := New(cfg)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
+	t.Cleanup(func() {
+		if err := a.Close(context.Background()); err != nil {
+			t.Errorf("Close() error = %v", err)
+		}
+	})
 	mux := http.NewServeMux()
 	a.Register(mux)
 	// A project's own protected route.
@@ -105,7 +124,16 @@ func setup(t *testing.T, hooks Hooks) fixture {
 		}
 		_ = json.NewEncoder(w).Encode(map[string]string{"user_id": u.ID.String(), "session_id": s.ID.String()})
 	})))
-	return fixture{pool: pool, clock: c, auth: a, mux: mux, logs: logs}
+	return fixture{pool: pool, clock: c, auth: a, mux: mux, logs: logs, mail: rec}
+}
+
+const testAppURL = "https://app.example.com"
+
+// sent waits for emails being sent in the background, then returns every
+// email sent so far.
+func (f fixture) sent() []mail.Message {
+	f.auth.sender.Wait()
+	return f.mail.Messages()
 }
 
 type response struct {
@@ -209,15 +237,45 @@ func (f fixture) userCount(t *testing.T) int {
 
 func TestNew(t *testing.T) {
 	t.Parallel()
-	if _, err := New(Config{}); err == nil {
-		t.Error("New() without DB: error = nil, want an error")
-	}
 	pool := testdb.New(t)
-	if _, err := New(Config{DB: pool, TrustedProxies: []netip.Prefix{{}}}); err == nil {
-		t.Error("New() with an invalid trusted proxy: error = nil, want an error")
+	// valid has only the required fields.
+	valid := func() Config {
+		return Config{DB: pool, Mailer: &mailtest.Recorder{}, AppURL: "https://app.example.com", AppName: "Example"}
 	}
-	if _, err := New(Config{DB: pool}); err != nil {
-		t.Errorf("New() with only DB: error = %v", err)
+	if _, err := New(valid()); err != nil {
+		t.Fatalf("New() with the required fields: error = %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		change func(*Config)
+	}{
+		{"no DB", func(c *Config) { c.DB = nil }},
+		{"invalid trusted proxy", func(c *Config) { c.TrustedProxies = []netip.Prefix{{}} }},
+		{"no mailer", func(c *Config) { c.Mailer = nil }},
+		{"no app name", func(c *Config) { c.AppName = " " }},
+		{"no app URL", func(c *Config) { c.AppURL = "" }},
+		{"relative app URL", func(c *Config) { c.AppURL = "/app" }},
+		{"http app URL", func(c *Config) { c.AppURL = "http://app.example.com" }},
+		{"other scheme", func(c *Config) { c.AppURL = "ftp://app.example.com" }},
+		{"app URL with query", func(c *Config) { c.AppURL = "https://app.example.com/?x=1" }},
+		{"app URL with fragment", func(c *Config) { c.AppURL = "https://app.example.com/#x" }},
+		{"app URL with user info", func(c *Config) { c.AppURL = "https://user:pw@app.example.com" }},
+	}
+	for _, tt := range tests {
+		cfg := valid()
+		tt.change(&cfg)
+		if _, err := New(cfg); err == nil {
+			t.Errorf("New() with %s: error = nil, want an error", tt.name)
+		}
+	}
+
+	for _, u := range []string{"http://localhost:3000", "http://127.0.0.1:3000/", "https://example.com/app/"} {
+		cfg := valid()
+		cfg.AppURL = u
+		if _, err := New(cfg); err != nil {
+			t.Errorf("New() with app URL %q: error = %v", u, err)
+		}
 	}
 }
 

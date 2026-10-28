@@ -12,8 +12,11 @@ paths:
       operationId: signUp
       summary: Sign up
       description: >
-        Creates an account and logs the user in. Until email verification
-        exists (build step 4), new accounts start unverified.
+        Creates an account and emails a verification link. By default
+        (verify first) the response is `202` whether or not the email
+        already has an account, and the owner of an existing account is
+        emailed instead. With `AllowUnverifiedLogin`, the user is logged in
+        immediately (`201`), and an existing email returns `409`.
       tags: [users]
       security: []
       requestBody:
@@ -23,13 +26,22 @@ paths:
             schema: { $ref: "#/components/schemas/Credentials" }
       responses:
         "201":
-          description: Account created and logged in.
+          description: Account created and logged in (`AllowUnverifiedLogin` only).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/LoginResponse" }
+        "202":
+          description: Verification email sent (the default).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [verification_required]
+                properties:
+                  verification_required: { type: boolean, const: true }
         "400": { $ref: "#/components/responses/BadRequest" }
         "409":
-          description: "`email_taken`: an account already uses this email."
+          description: "`email_taken`: an account already uses this email (`AllowUnverifiedLogin` only)."
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -78,6 +90,13 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+        "403":
+          description: >
+            `email_not_verified`: the password is correct, but the email isn't
+            verified yet (verify first only).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
         "413": { $ref: "#/components/responses/PayloadTooLarge" }
         "422": { $ref: "#/components/responses/ValidationFailed" }
         "500": { $ref: "#/components/responses/InternalError" }
@@ -109,6 +128,71 @@ paths:
       responses:
         "204": { description: Logged out everywhere. }
         "401": { $ref: "#/components/responses/Unauthenticated" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /v1/email-verifications:
+    post:
+      operationId: requestEmailVerification
+      summary: Send a new verification link
+      description: >
+        Always `202`, whether or not the email has an account. A link is
+        sent only to an existing, unverified account, at most once a minute.
+      tags: [email-verifications]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EmailRequest" }
+      responses:
+        "202": { description: Accepted. }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /v1/email-verifications/confirm:
+    post:
+      operationId: confirmEmailVerification
+      summary: Verify an email and log in
+      description: >
+        Takes the token from the verification link (the part after
+        `#token=`) and the account's password. After 5 wrong passwords the
+        token stops working.
+      tags: [email-verifications]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [token, password, client]
+              properties:
+                token: { type: string }
+                password: { type: string }
+                client: { type: string, enum: [web, mobile] }
+      responses:
+        "201":
+          description: Verified and logged in.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LoginResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401":
+          description: "`invalid_credentials`: wrong password."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "422":
+          description: >
+            `token_invalid_or_expired` for a bad, used, or expired token, or
+            `validation_failed` for missing fields.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
         "500": { $ref: "#/components/responses/InternalError" }
 
   /v1/sessions/current:
@@ -164,6 +248,13 @@ components:
           type: string
           description: 12 to 256 characters when signing up.
         client: { type: string, enum: [web, mobile] }
+
+    EmailRequest:
+      type: object
+      additionalProperties: false
+      required: [email]
+      properties:
+        email: { type: string, maxLength: 254 }
 
     User:
       type: object
