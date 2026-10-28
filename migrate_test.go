@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"sort"
 	"testing"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/atlasopsec/auth/internal/migrations"
 	"github.com/atlasopsec/auth/internal/testdb"
 )
 
@@ -46,7 +48,7 @@ func TestMigrateCreatesTablesInAuthSchema(t *testing.T) {
 		t.Fatalf("Migrate() error = %v", err)
 	}
 
-	want := []string{"goose_db_version", "sessions", "users"}
+	want := []string{"email_tokens", "goose_db_version", "sessions", "users"}
 	if diff := cmp.Diff(want, tablesIn(t, pool, "auth")); diff != "" {
 		t.Errorf("tables in auth schema (-want +got):\n%s", diff)
 	}
@@ -99,13 +101,20 @@ func TestMigrateConcurrently(t *testing.T) {
 		}
 	}
 
-	var applied int
-	if err := pool.QueryRow(ctx,
-		`SELECT count(*) FROM auth.goose_db_version WHERE version_id > 0`).Scan(&applied); err != nil {
+	files, err := fs.Glob(migrations.FS, "*.sql")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if applied != 1 {
-		t.Errorf("migration 1 recorded %d times, want 1", applied)
+	var applied, distinct int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*), count(DISTINCT version_id) FROM auth.goose_db_version WHERE version_id > 0`).Scan(&applied, &distinct); err != nil {
+		t.Fatal(err)
+	}
+	if applied != distinct {
+		t.Errorf("%d migrations recorded, but only %d distinct: some were applied twice", applied, distinct)
+	}
+	if distinct != len(files) {
+		t.Errorf("%d migrations applied, want all %d", distinct, len(files))
 	}
 }
 
