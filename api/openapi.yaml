@@ -56,10 +56,10 @@ paths:
       tags: [users]
       responses:
         "200":
-          description: The logged-in user.
+          description: The logged-in user, with their 2FA status.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/User" }
+              schema: { $ref: "#/components/schemas/CurrentUser" }
         "401": { $ref: "#/components/responses/Unauthenticated" }
         "500": { $ref: "#/components/responses/InternalError" }
 
@@ -665,6 +665,106 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
         "500": { $ref: "#/components/responses/InternalError" }
 
+  /v1/users/me/two-factor:
+    post:
+      operationId: startTwoFactor
+      summary: Start setting up 2FA
+      description: >
+        Returns a new secret for the user's authenticator app, as text and
+        as an `otpauth://` URI for a QR code. 2FA isn't on until confirmed.
+        Starting again replaces a pending secret.
+      tags: [two-factor]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CurrentPassword" }
+      responses:
+        "201":
+          description: Setup started.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [secret, otpauth_uri]
+                properties:
+                  secret: { type: string, description: Base32, for typing in by hand. }
+                  otpauth_uri: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "409": { $ref: "#/components/responses/TwoFactorConflict" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+    delete:
+      operationId: disableTwoFactor
+      summary: Turn off 2FA
+      description: >
+        Needs the current password and a code (TOTP or recovery). Users
+        who must have 2FA can't.
+      tags: [two-factor]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CurrentPasswordAndCode" }
+      responses:
+        "204": { description: 2FA is off. }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403":
+          description: "`two_factor_required`: 2FA is required for this user."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409": { $ref: "#/components/responses/TwoFactorConflict" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /v1/users/me/two-factor/confirm:
+    post:
+      operationId: confirmTwoFactor
+      summary: Turn 2FA on
+      description: >
+        With a working code from the authenticator app. Returns the
+        recovery codes, the only time they're shown.
+      tags: [two-factor]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [code]
+              properties:
+                code: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/RecoveryCodes" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "409": { $ref: "#/components/responses/TwoFactorConflict" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /v1/users/me/two-factor/recovery-codes:
+    post:
+      operationId: regenerateRecoveryCodes
+      summary: Replace recovery codes
+      description: Needs the current password and a code. The old codes stop working.
+      tags: [two-factor]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CurrentPasswordAndCode" }
+      responses:
+        "200": { $ref: "#/components/responses/RecoveryCodes" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "409": { $ref: "#/components/responses/TwoFactorConflict" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
   /v1/sessions/current:
     delete:
       operationId: logOut
@@ -763,6 +863,30 @@ components:
         role: { type: string }
         joined_at: { type: string, format: date-time }
 
+    CurrentUser:
+      allOf:
+        - { $ref: "#/components/schemas/User" }
+        - type: object
+          required: [two_factor_enabled, two_factor_required]
+          properties:
+            two_factor_enabled: { type: boolean }
+            two_factor_required: { type: boolean }
+
+    CurrentPassword:
+      type: object
+      additionalProperties: false
+      required: [current_password]
+      properties:
+        current_password: { type: string }
+
+    CurrentPasswordAndCode:
+      type: object
+      additionalProperties: false
+      required: [current_password, code]
+      properties:
+        current_password: { type: string }
+        code: { type: string, description: A TOTP code or a recovery code. }
+
     User:
       type: object
       required: [id, email, email_verified, created_at]
@@ -850,6 +974,26 @@ components:
       schema: { type: string, format: uuid }
 
   responses:
+    RecoveryCodes:
+      description: The new recovery codes. They're only shown here.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [recovery_codes]
+            properties:
+              recovery_codes:
+                type: array
+                minItems: 10
+                maxItems: 10
+                items: { type: string, example: ABCD-EFGH-IJKL-MNOP }
+    TwoFactorConflict:
+      description: >
+        `two_factor_already_enabled`, `two_factor_not_enabled`, or
+        `two_factor_setup_not_started`.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
     Forbidden:
       description: >
         `forbidden`: logged in, but the user's role doesn't grant the

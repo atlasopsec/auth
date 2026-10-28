@@ -104,6 +104,7 @@ func setupWith(t *testing.T, cfg Config) fixture {
 	cfg.Mailer = rec
 	cfg.AppURL = testAppURL
 	cfg.AppName = "Example"
+	cfg.EncryptionKey = testEncryptionKey
 	a, err := New(cfg)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -154,6 +155,9 @@ func (f *fakeBreach) set(breached map[string]bool, err error) {
 }
 
 const testAppURL = "https://app.example.com"
+
+// testEncryptionKey is an obviously fake key (32 bytes of 0x01).
+const testEncryptionKey = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE="
 
 // sent waits for emails being sent in the background, then returns every
 // email sent so far.
@@ -266,7 +270,7 @@ func TestNew(t *testing.T) {
 	pool := testdb.New(t)
 	// valid has only the required fields.
 	valid := func() Config {
-		return Config{DB: pool, Mailer: &mailtest.Recorder{}, AppURL: "https://app.example.com", AppName: "Example"}
+		return Config{DB: pool, Mailer: &mailtest.Recorder{}, AppURL: "https://app.example.com", AppName: "Example", EncryptionKey: testEncryptionKey}
 	}
 	if _, err := New(valid()); err != nil {
 		t.Fatalf("New() with the required fields: error = %v", err)
@@ -287,6 +291,9 @@ func TestNew(t *testing.T) {
 		{"app URL with query", func(c *Config) { c.AppURL = "https://app.example.com/?x=1" }},
 		{"app URL with fragment", func(c *Config) { c.AppURL = "https://app.example.com/#x" }},
 		{"app URL with user info", func(c *Config) { c.AppURL = "https://user:pw@app.example.com" }},
+		{"no encryption key", func(c *Config) { c.EncryptionKey = "" }},
+		{"short encryption key", func(c *Config) { c.EncryptionKey = "AQEBAQEBAQEBAQEBAQEBAQ==" }},
+		{"encryption key not base64", func(c *Config) { c.EncryptionKey = "not-a-key" }},
 	}
 	for _, tt := range tests {
 		cfg := valid()
@@ -718,7 +725,7 @@ func TestMe(t *testing.T) {
 	if res.status != http.StatusOK {
 		t.Fatalf("status %d", res.status)
 	}
-	want := `{"id":"` + l.User.ID.String() + `","email":"ada@example.com","email_verified":false,"created_at":"2026-01-01T12:00:00Z"}` + "\n"
+	want := `{"id":"` + l.User.ID.String() + `","email":"ada@example.com","email_verified":false,"created_at":"2026-01-01T12:00:00Z","two_factor_enabled":false,"two_factor_required":false}` + "\n"
 	if diff := cmp.Diff(want, string(res.body)); diff != "" {
 		t.Errorf("body (-want +got):\n%s", diff)
 	}

@@ -820,7 +820,7 @@ The user is emailed that 2FA was turned off. If 2FA is required for them, they'r
 
 ### Notices
 
-Users are emailed when 2FA is turned on or off, when recovery codes are regenerated, and when a recovery code is used (with how many are left). The standard says users SHOULD be told about new 2FA settings. The four templates join `Emails`.
+Users are emailed when 2FA is turned on or off, when recovery codes are regenerated, and when a recovery code is used (with how many are left). The standard says users SHOULD be told about new 2FA settings. The templates join `Emails`: `TwoFactorEnabled`, `TwoFactorDisabled`, and `RecoveryCodesRegenerated` (PR 1), then `RecoveryCodeUsed` and the guessing-limit warning (PR 2).
 
 ### Database
 
@@ -840,7 +840,10 @@ auth.two_factor_challenges   id, user_id, token_hash, client, ip, user_agent,
 
 | Code | Status | When |
 |---|---|---|
-| `invalid_two_factor_code` | 401 | Wrong TOTP or recovery code |
+| `invalid_two_factor_code` | 401 | Wrong TOTP or recovery code at login. The logged-in setup endpoints use `422 validation_failed` with `code: incorrect` instead, since a 401 would tell the app the user was logged out |
+| `two_factor_already_enabled` | 409 | Starting or confirming setup when 2FA is already on |
+| `two_factor_not_enabled` | 409 | Turning off 2FA, or regenerating codes, when it's off |
+| `two_factor_setup_not_started` | 409 | Confirming before starting setup |
 | `two_factor_setup_required` | 403 | 2FA required but not set up yet |
 | `two_factor_required` | 403 | Turning off 2FA that's required |
 | `rate_limited` | 429 | Too many wrong codes (above) |
