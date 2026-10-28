@@ -117,6 +117,7 @@ func (a *Auth) registerOrganizations(mux *http.ServeMux) {
 	mux.Handle("PATCH /v1/organizations/{id}/members/{user_id}", endpoint(a.orgRoute(PermMembersManage, orgFromPath, http.HandlerFunc(a.changeMemberRole))))
 	// Leaving needs no permission, so this checks it in the handler.
 	mux.Handle("DELETE /v1/organizations/{id}/members/{user_id}", endpoint(a.orgRoute("", orgFromPath, http.HandlerFunc(a.removeMember))))
+	a.registerInvitations(mux)
 }
 
 type orgJSON struct {

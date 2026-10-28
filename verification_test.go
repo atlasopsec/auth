@@ -488,6 +488,7 @@ func TestEveryEmailCanBeCustomized(t *testing.T) {
 			PasswordChanged: custom("PasswordChanged"),
 			EmailChange:     custom("EmailChange"),
 			EmailChanged:    custom("EmailChanged"),
+			Invitation:      custom("Invitation"),
 		},
 	})
 	if err != nil {
@@ -500,6 +501,7 @@ func TestEveryEmailCanBeCustomized(t *testing.T) {
 		"PasswordChanged": a.emails.PasswordChanged,
 		"EmailChange":     a.emails.EmailChange,
 		"EmailChanged":    a.emails.EmailChanged,
+		"Invitation":      a.emails.Invitation,
 	} {
 		if subject, _, _ := tmpl(EmailData{}); subject != name {
 			t.Errorf("%s uses the default template, want the custom one", name)

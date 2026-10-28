@@ -196,6 +196,9 @@ func New(cfg Config) (*Auth, error) {
 	if a.emails.EmailChanged == nil {
 		a.emails.EmailChanged = defaultEmailChanged
 	}
+	if a.emails.Invitation == nil {
+		a.emails.Invitation = defaultInvitation
+	}
 	if !cfg.DisableBreachCheck {
 		a.breach = pwned.New(pwned.DefaultURL)
 	}

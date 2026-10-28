@@ -24,6 +24,19 @@ type AuthEmailToken struct {
 	UpdatedAt      time.Time
 }
 
+type AuthInvitation struct {
+	ID             uuid.UUID
+	OrganizationID uuid.UUID
+	Email          string
+	Role           string
+	TokenHash      []byte
+	InvitedBy      uuid.UUID
+	ExpiresAt      time.Time
+	AcceptedAt     *time.Time
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
 type AuthMembership struct {
 	ID             uuid.UUID
 	OrganizationID uuid.UUID
