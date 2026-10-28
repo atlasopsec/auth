@@ -21,6 +21,11 @@ type Emails struct {
 	// SignUpAttempt tells the owner of an existing account that someone
 	// tried to sign up with their address. Link is a password reset link.
 	SignUpAttempt func(EmailData) (subject, text, html string)
+	// PasswordReset sends a password reset link.
+	PasswordReset func(EmailData) (subject, text, html string)
+	// PasswordChanged tells a user their password was changed or reset.
+	// Link is empty.
+	PasswordChanged func(EmailData) (subject, text, html string)
 }
 
 // EmailData is what an email template can use.
@@ -62,6 +67,26 @@ The link works for %s. If it wasn't you, you can ignore this email. Your account
 		""
 }
 
+func defaultPasswordReset(d EmailData) (string, string, string) {
+	return "Reset your password for " + d.AppName,
+		fmt.Sprintf(`Someone asked to reset the password for your %s account. To choose a new password, open this link:
+
+%s
+
+The link works for %s. If you didn't ask for this, you can ignore this email. Your password hasn't changed.
+`, d.AppName, d.Link, humanDuration(d.ExpiresIn)),
+		""
+}
+
+func defaultPasswordChanged(d EmailData) (string, string, string) {
+	return "Your " + d.AppName + " password was changed",
+		fmt.Sprintf(`The password for your %s account was just changed.
+
+If you did this, you can ignore this email. If you didn't, reset your password now at %s/reset-password. Resetting it logs everyone out of your account.
+`, d.AppName, d.AppURL),
+		""
+}
+
 // humanDuration writes the token lifetimes used in emails: "30 minutes",
 // "1 hour", "24 hours".
 func humanDuration(d time.Duration) string {
@@ -90,16 +115,25 @@ func (a *Auth) link(kind emailtoken.Kind, tok string) string {
 	return a.appURL + linkPaths[kind] + "#token=" + tok
 }
 
-// sendEmail renders an email and hands it to the background sender.
-// tokenID identifies the message across retries.
+// sendEmail renders an email with a token link and hands it to the
+// background sender. tokenID identifies the message across retries.
 func (a *Auth) sendEmail(to string, tmpl func(EmailData) (string, string, string), kind emailtoken.Kind, tok string, tokenID uuid.UUID) {
-	subject, text, html := tmpl(EmailData{
+	a.send(to, tmpl, EmailData{
 		AppName:   a.appName,
 		AppURL:    a.appURL,
 		Link:      a.link(kind, tok),
 		ExpiresIn: kind.Lifetime(),
-	})
-	a.sender.Send(mail.Message{To: to, Subject: subject, Text: text, HTML: html, IdempotencyKey: tokenID.String()})
+	}, tokenID)
+}
+
+// sendNotice sends an email without a link, such as a security notice.
+func (a *Auth) sendNotice(to string, tmpl func(EmailData) (string, string, string)) {
+	a.send(to, tmpl, EmailData{AppName: a.appName, AppURL: a.appURL}, uuid.Must(uuid.NewV7()))
+}
+
+func (a *Auth) send(to string, tmpl func(EmailData) (string, string, string), d EmailData, key uuid.UUID) {
+	subject, text, html := tmpl(d)
+	a.sender.Send(mail.Message{To: to, Subject: subject, Text: text, HTML: html, IdempotencyKey: key.String()})
 }
 
 // parseAppURL checks Config.AppURL: an absolute https URL (or http on

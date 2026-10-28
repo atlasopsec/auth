@@ -70,12 +70,13 @@ func (s *syncBuffer) String() string {
 }
 
 type fixture struct {
-	pool  *pgxpool.Pool
-	clock *clock
-	auth  *Auth
-	mux   *http.ServeMux
-	logs  *syncBuffer
-	mail  *mailtest.Recorder
+	pool   *pgxpool.Pool
+	clock  *clock
+	auth   *Auth
+	mux    *http.ServeMux
+	logs   *syncBuffer
+	mail   *mailtest.Recorder
+	breach *fakeBreach
 }
 
 // proxyAddr is the test Next.js server, trusted to forward client details.
@@ -107,6 +108,11 @@ func setupWith(t *testing.T, cfg Config) fixture {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
+	// Never call the real Have I Been Pwned API from tests.
+	breach := &fakeBreach{}
+	if a.breach != nil {
+		a.breach = breach
+	}
 	t.Cleanup(func() {
 		if err := a.Close(context.Background()); err != nil {
 			t.Errorf("Close() error = %v", err)
@@ -124,7 +130,27 @@ func setupWith(t *testing.T, cfg Config) fixture {
 		}
 		_ = json.NewEncoder(w).Encode(map[string]string{"user_id": u.ID.String(), "session_id": s.ID.String()})
 	})))
-	return fixture{pool: pool, clock: c, auth: a, mux: mux, logs: logs, mail: rec}
+	return fixture{pool: pool, clock: c, auth: a, mux: mux, logs: logs, mail: rec, breach: breach}
+}
+
+// fakeBreach is a breach checker that reports the passwords in breached,
+// or fails with err.
+type fakeBreach struct {
+	mu       sync.Mutex
+	breached map[string]bool
+	err      error
+}
+
+func (f *fakeBreach) Breached(_ context.Context, pw string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.breached[pw], f.err
+}
+
+func (f *fakeBreach) set(breached map[string]bool, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.breached, f.err = breached, err
 }
 
 const testAppURL = "https://app.example.com"

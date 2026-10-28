@@ -15,6 +15,7 @@ import (
 
 	"github.com/atlasopsec/auth/internal/db"
 	"github.com/atlasopsec/auth/internal/emailtoken"
+	"github.com/atlasopsec/auth/internal/pwned"
 	"github.com/atlasopsec/auth/internal/sender"
 	"github.com/atlasopsec/auth/internal/session"
 	"github.com/atlasopsec/auth/mail"
@@ -60,6 +61,12 @@ type Config struct {
 
 	// Emails overrides the default email templates.
 	Emails Emails
+
+	// DisableBreachCheck turns off checking new passwords against Have I
+	// Been Pwned. The check is on by default; it sends only the first 5
+	// characters of the password's SHA-1 hash, and is skipped if the API
+	// doesn't answer within 2 seconds.
+	DisableBreachCheck bool
 }
 
 // Hooks let a project react to auth events.
@@ -91,6 +98,13 @@ type Auth struct {
 	appName         string
 	allowUnverified bool
 	emails          Emails
+	// breach is nil when the breach check is disabled.
+	breach breachChecker
+}
+
+// breachChecker is implemented by *pwned.Checker, and faked in tests.
+type breachChecker interface {
+	Breached(ctx context.Context, password string) (bool, error)
 }
 
 // New validates cfg and returns a ready Auth. It doesn't touch the
@@ -137,6 +151,15 @@ func New(cfg Config) (*Auth, error) {
 	}
 	if a.emails.SignUpAttempt == nil {
 		a.emails.SignUpAttempt = defaultSignUpAttempt
+	}
+	if a.emails.PasswordReset == nil {
+		a.emails.PasswordReset = defaultPasswordReset
+	}
+	if a.emails.PasswordChanged == nil {
+		a.emails.PasswordChanged = defaultPasswordChanged
+	}
+	if !cfg.DisableBreachCheck {
+		a.breach = pwned.New(pwned.DefaultURL)
 	}
 	a.sessions = session.NewManager(cfg.DB, a.now)
 	a.tokens = emailtoken.NewManager(cfg.DB, a.now)
