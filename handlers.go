@@ -37,6 +37,7 @@ func (a *Auth) Register(mux *http.ServeMux) {
 	mux.Handle("POST /v1/users/me/password", endpoint(a.Authenticated(http.HandlerFunc(a.changePassword))))
 	mux.Handle("POST /v1/email-changes", endpoint(a.Authenticated(http.HandlerFunc(a.requestEmailChange))))
 	mux.Handle("POST /v1/email-changes/confirm", endpoint(http.HandlerFunc(a.confirmEmailChange)))
+	a.registerOrganizations(mux)
 	mux.Handle("GET /v1/users/me", endpoint(a.Authenticated(http.HandlerFunc(a.me))))
 	mux.Handle("GET /v1/sessions", endpoint(a.Authenticated(http.HandlerFunc(a.listSessions))))
 	mux.Handle("DELETE /v1/sessions/current", endpoint(a.Authenticated(http.HandlerFunc(a.logOut))))

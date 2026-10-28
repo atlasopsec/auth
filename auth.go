@@ -75,6 +75,10 @@ type Config struct {
 	// permission. Leave nil if the app has no organizations.
 	OrgRoles rbac.Roles
 
+	// DisableOrganizationCreation removes POST /v1/organizations, for apps
+	// that create organizations themselves with CreateOrganization.
+	DisableOrganizationCreation bool
+
 	// AppRoles are roles that apply across the whole app, such as staff
 	// roles, checked by Require. Users have no app role until SetAppRole
 	// gives them one. Leave nil if the app doesn't need them.
@@ -111,9 +115,10 @@ type Auth struct {
 	allowUnverified bool
 	emails          Emails
 	// breach is nil when the breach check is disabled.
-	breach   breachChecker
-	orgRoles rbac.Roles
-	appRoles rbac.Roles
+	breach             breachChecker
+	orgRoles           rbac.Roles
+	appRoles           rbac.Roles
+	disableOrgCreation bool
 }
 
 // breachChecker is implemented by *pwned.Checker, and faked in tests.
@@ -164,6 +169,8 @@ func New(cfg Config) (*Auth, error) {
 		emails:          cfg.Emails,
 		orgRoles:        cfg.OrgRoles,
 		appRoles:        cfg.AppRoles,
+
+		disableOrgCreation: cfg.DisableOrganizationCreation,
 	}
 	if a.log == nil {
 		a.log = slog.Default()

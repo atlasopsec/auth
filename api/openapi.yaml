@@ -358,6 +358,178 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
         "500": { $ref: "#/components/responses/InternalError" }
 
+  /v1/organizations:
+    post:
+      operationId: createOrganization
+      summary: Create an organization
+      description: >
+        The creator becomes its owner. Requires a verified email. Not
+        available when the app sets `DisableOrganizationCreation`.
+      tags: [organizations]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OrganizationName" }
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Organization" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403":
+          description: "`email_not_verified`: verify your email first."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+    get:
+      operationId: listOrganizations
+      summary: My organizations
+      description: With my role in each. Not paginated; `next_cursor` is always null.
+      tags: [organizations]
+      responses:
+        "200":
+          description: The user's organizations.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, next_cursor]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Organization" }
+                  next_cursor: { type: "null" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /v1/organizations/{id}:
+    parameters:
+      - { $ref: "#/components/parameters/OrganizationIDPath" }
+    get:
+      operationId: getOrganization
+      summary: One of my organizations
+      tags: [organizations]
+      responses:
+        "200":
+          description: The organization, with my role.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Organization" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+    patch:
+      operationId: renameOrganization
+      summary: Rename an organization
+      description: Requires `organization:update`.
+      tags: [organizations]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OrganizationName" }
+      responses:
+        "200":
+          description: Renamed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Organization" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /v1/organizations/{id}/members:
+    parameters:
+      - { $ref: "#/components/parameters/OrganizationIDPath" }
+    get:
+      operationId: listMembers
+      summary: An organization's members
+      description: In the order they joined. Requires `members:read`.
+      tags: [members]
+      parameters:
+        - { $ref: "#/components/parameters/Limit" }
+        - { $ref: "#/components/parameters/Cursor" }
+      responses:
+        "200":
+          description: A page of members.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, next_cursor]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Member" }
+                  next_cursor: { type: [string, "null"] }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /v1/organizations/{id}/members/{user_id}:
+    parameters:
+      - { $ref: "#/components/parameters/OrganizationIDPath" }
+      - name: user_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    patch:
+      operationId: changeMemberRole
+      summary: Change a member's role
+      description: >
+        Requires `members:manage`. You can only give a role whose
+        permissions you all have, and only change the role of someone whose
+        permissions you all have. Only owners can make or change owners.
+      tags: [members]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [role]
+              properties:
+                role: { type: string }
+      responses:
+        "200":
+          description: The member, with their new role.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Member" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/LastOwner" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+    delete:
+      operationId: removeMember
+      summary: Remove a member, or leave
+      description: >
+        With your own user ID, leaves the organization. Removing someone
+        else requires `members:manage` and follows the same rules as
+        changing their role.
+      tags: [members]
+      responses:
+        "204": { description: Removed. }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/LastOwner" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
   /v1/sessions/current:
     delete:
       operationId: logOut
@@ -418,6 +590,32 @@ components:
       required: [email]
       properties:
         email: { type: string, maxLength: 254 }
+
+    OrganizationName:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 200 }
+
+    Organization:
+      type: object
+      required: [id, name, role, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        role: { type: string, description: "The caller's role in it." }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    Member:
+      type: object
+      required: [user_id, email, role, joined_at]
+      properties:
+        user_id: { type: string, format: uuid }
+        email: { type: string }
+        role: { type: string }
+        joined_at: { type: string, format: date-time }
 
     User:
       type: object
@@ -480,6 +678,20 @@ components:
                   message: { type: string }
 
   parameters:
+    OrganizationIDPath:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    Cursor:
+      name: cursor
+      in: query
+      description: The `next_cursor` from the previous page.
+      schema: { type: string }
     OrganizationID:
       name: X-Organization-ID
       in: header
@@ -496,6 +708,11 @@ components:
       description: >
         `forbidden`: logged in, but the user's role doesn't grant the
         permission the route requires (`Require` or `RequireOrg`).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    LastOwner:
+      description: "`last_owner`: the organization would be left without an owner."
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
