@@ -32,6 +32,8 @@ type Emails struct {
 	// EmailChanged tells the old address that the account's email was
 	// changed. Link is empty.
 	EmailChanged func(EmailData) (subject, text, html string)
+	// Invitation invites someone to join an organization. OrgName is set.
+	Invitation func(EmailData) (subject, text, html string)
 }
 
 // EmailData is what an email template can use.
@@ -45,6 +47,8 @@ type EmailData struct {
 	Link string
 	// ExpiresIn is how long Link works.
 	ExpiresIn time.Duration
+	// OrgName is the organization's name, for invitations.
+	OrgName string
 }
 
 func defaultVerifyEmail(d EmailData) (string, string, string) {
@@ -113,9 +117,23 @@ If you didn't do this, contact %s support right away: someone else may have take
 		""
 }
 
+func defaultInvitation(d EmailData) (string, string, string) {
+	return "You're invited to join " + d.OrgName + " on " + d.AppName,
+		fmt.Sprintf(`You've been invited to join %s on %s. To accept, open this link and log in, or sign up with this email address:
+
+%s
+
+The invitation works for %s. If you weren't expecting it, you can ignore this email.
+`, d.OrgName, d.AppName, d.Link, humanDuration(d.ExpiresIn)),
+		""
+}
+
 // humanDuration writes the token lifetimes used in emails: "30 minutes",
 // "1 hour", "24 hours".
 func humanDuration(d time.Duration) string {
+	if d >= 48*time.Hour && d%(24*time.Hour) == 0 {
+		return fmt.Sprintf("%d days", int(d/(24*time.Hour)))
+	}
 	if d >= time.Hour && d%time.Hour == 0 {
 		if h := int(d / time.Hour); h != 1 {
 			return fmt.Sprintf("%d hours", h)

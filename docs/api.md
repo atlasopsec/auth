@@ -360,6 +360,7 @@ Defaults are **plain text, brandless, and short**: plain text reaches inboxes mo
 type Emails struct {
 	VerifyEmail, SignUpAttempt, PasswordReset, PasswordChanged,
 	EmailChange, EmailChanged func(EmailData) (subject, text, html string)
+	Invitation func(EmailData) (subject, text, html string) // step 5
 }
 
 type EmailData struct {
@@ -367,6 +368,7 @@ type EmailData struct {
 	AppURL    string        // for links without a token, e.g. AppURL + "/reset-password"
 	Link      string        // empty for notices
 	ExpiresIn time.Duration // how long Link works
+	OrgName   string        // invitations only (step 5)
 }
 ```
 

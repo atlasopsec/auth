@@ -530,6 +530,141 @@ paths:
         "409": { $ref: "#/components/responses/LastOwner" }
         "500": { $ref: "#/components/responses/InternalError" }
 
+  /v1/organizations/{id}/invitations:
+    parameters:
+      - { $ref: "#/components/parameters/OrganizationIDPath" }
+    post:
+      operationId: invite
+      summary: Invite someone by email
+      description: >
+        Requires `members:manage`, and you can only invite to a role whose
+        permissions you all have (only owners invite owners). Emails a link
+        that works for 7 days. Inviting the same address again replaces the
+        earlier invitation; within a minute, it returns the existing
+        invitation without sending another email.
+      tags: [invitations]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [email, role]
+              properties:
+                email: { type: string, maxLength: 254 }
+                role: { type: string }
+      responses:
+        "201":
+          description: Invitation sent.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Invitation" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "`already_member`: that address already belongs to a member."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+    get:
+      operationId: listInvitations
+      summary: Pending invitations
+      description: Unaccepted and unexpired, oldest first. Requires `members:manage`.
+      tags: [invitations]
+      parameters:
+        - { $ref: "#/components/parameters/Limit" }
+        - { $ref: "#/components/parameters/Cursor" }
+      responses:
+        "200":
+          description: A page of invitations.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, next_cursor]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Invitation" }
+                  next_cursor: { type: [string, "null"] }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /v1/organizations/{id}/invitations/{invitation_id}:
+    parameters:
+      - { $ref: "#/components/parameters/OrganizationIDPath" }
+      - name: invitation_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    delete:
+      operationId: cancelInvitation
+      summary: Cancel a pending invitation
+      description: Requires `members:manage`, and the same role rule as inviting.
+      tags: [invitations]
+      responses:
+        "204": { description: Cancelled. }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /v1/invitations/accept:
+    post:
+      operationId: acceptInvitation
+      summary: Accept an invitation
+      description: >
+        Takes the token from the invitation link (the part after
+        `#token=`). The logged-in user's verified email must match the
+        invited address.
+      tags: [invitations]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [token]
+              properties:
+                token: { type: string }
+      responses:
+        "200":
+          description: Joined. The organization, with the new member's role.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Organization" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403":
+          description: >
+            `invitation_email_mismatch` (sent to a different address) or
+            `email_not_verified`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: "`already_member`: you're already a member."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "422":
+          description: >
+            `token_invalid_or_expired` for a bad, used, cancelled, or expired
+            invitation, or `validation_failed` for a missing token.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
   /v1/sessions/current:
     delete:
       operationId: logOut
@@ -607,6 +742,17 @@ components:
         role: { type: string, description: "The caller's role in it." }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+
+    Invitation:
+      type: object
+      required: [id, email, role, invited_by, expires_at, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string }
+        role: { type: string }
+        invited_by: { type: string, format: uuid }
+        expires_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
 
     Member:
       type: object

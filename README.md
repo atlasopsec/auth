@@ -32,7 +32,7 @@ How the module is structured and how projects use it: [docs/design.md](docs/desi
 - [x] HTTP middleware, sign-up, login, and session endpoints
 - [x] Email verification and password reset
 - [x] Email change
-- [ ] Roles, permissions, and organizations
+- [x] Roles, permissions, and organizations
 - [ ] Two-factor authentication (TOTP)
 - [ ] OAuth: Google, GitHub, Apple
 - [ ] Rate limiting, security event log, and email sending
