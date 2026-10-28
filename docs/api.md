@@ -2,7 +2,7 @@
 
 The module's public Go API and the HTTP endpoints it serves.
 
-> **Status: approved.** §1–6 cover build steps 3 and 4 (built). §7 covers build step 5 (roles, permissions, and organizations), approved and being built. Sections marked **(Decision)** were confirmed in review. Later steps (2FA, OAuth) add to this but don't change what's here.
+> **Status:** §1–7 (build steps 3–5) are approved and built. §8 (build step 6: two-factor authentication) is a **sketch for review**; its **(Decision)** items need sign-off before code is written. Sections marked **(Decision)** in §1–7 were confirmed in review.
 
 Once a name below is released, changing or removing it is a breaking change (a new major version), so this is the moment to get it right.
 
@@ -694,3 +694,145 @@ Confirmed in review on 2026-10-28:
 5. **No privilege escalation:** you can only grant roles whose permissions you already have; only owners grant owner.
 6. **Invitations require a logged-in user with a matching verified email**, and expire after 7 days.
 7. **Deleting organizations isn't in step 5.**
+
+---
+
+## 8. Step 6: two-factor authentication (sketch for review)
+
+Step 6 adds 2FA from the [auth standard](https://github.com/jakefrenzel/engineering-standards/blob/main/standards/auth.md) §6:
+- **TOTP** (authenticator apps like 1Password or Google Authenticator), implemented in-house per design.md decision 5.
+- **10 single-use recovery codes.**
+- **Secrets stored encrypted** with AES-GCM.
+- **2FA required for elevated roles** and for individual users an admin marks.
+- **A working code before 2FA turns on.**
+- **Password and code to turn it off.**
+
+### Encryption key (Decision)
+
+```go
+type Config struct {
+	// ...everything so far, plus:
+
+	// EncryptionKey encrypts 2FA secrets: 32 random bytes, base64-encoded,
+	// from an environment variable (e.g. AUTH_ENCRYPTION_KEY). Required.
+	// Generate one with: openssl rand -base64 32
+	EncryptionKey string
+}
+```
+
+- **Required for every project,** so 2FA is always available to users, as you wanted ("at least as an option").
+- **AES-256-GCM**, with the user's ID as associated data. A secret copied onto another user's row won't decrypt.
+- **Every ciphertext starts with a key ID,** so key rotation (an `EncryptionKeys` list for old keys) can be added later without migrating anything.
+- **Losing the key** means every user has to set up 2FA again. It lives in Railway's variables like any other secret, and the README will say to back it up.
+
+### Setting up 2FA
+
+| Endpoint | Body | Returns |
+|---|---|---|
+| `POST /v1/users/me/two-factor` | `{ current_password }` | `201 { secret, otpauth_uri }`. Pending until confirmed |
+| `POST /v1/users/me/two-factor/confirm` | `{ code }` | `200 { recovery_codes: [10] }`. 2FA is now on |
+| `DELETE /v1/users/me/two-factor` | `{ current_password, code }` | `204`. Refused (`403 two_factor_required`) if the user must have 2FA |
+| `POST /v1/users/me/two-factor/recovery-codes` | `{ current_password, code }` | `200 { recovery_codes: [10] }`, replacing the old ones |
+
+- **Setup needs the current password,** like other account-security changes. Confirming needs a working code from the app, so a bad scan can't lock anyone out (the standard).
+- **`otpauth_uri`** is the standard `otpauth://totp/…` link with the app name as issuer. The client turns it into a QR code; `secret` is for typing in by hand. Both are shown only during setup.
+- **Code settings:** 6 digits, 30-second steps, SHA-1. That's what every authenticator app supports.
+- **`GET /v1/users/me` gains two fields:** `two_factor_enabled` and `two_factor_required`. Adding fields isn't a breaking change.
+
+### Logging in with 2FA (Decision)
+
+For a user with 2FA on, a correct password no longer returns a session:
+
+```json
+POST /v1/sessions  →  200
+{ "two_factor_required": true, "challenge_token": "q3J…", "expires_at": "2026-10-28T13:05:00Z" }
+```
+
+```json
+POST /v1/two-factor-challenges/verify
+{ "challenge_token": "q3J…", "code": "123456" }
+→ 201, the usual login response
+```
+
+- **The challenge token proves the password step happened,** so it's a random secret (stored hashed) sent in the body, not an ID in the URL. This changes design.md's `/v1/two-factor-challenges/{id}/verify` and the `challenge_id` name promised in §2.
+- **A challenge works for 5 minutes and allows 5 wrong codes.** After that, the user starts over with their password.
+- **Codes are accepted for the current 30-second step and one either side,** to allow for clock drift. A code that's been used is never accepted again, so a code someone watched you type is useless.
+- **`code` takes a TOTP code or a recovery code.** The format tells them apart.
+- **Every way into a session goes through the challenge.** That includes the verification link (§6), which returns a challenge instead of a session when 2FA is on.
+- **A wrong code** returns `401 invalid_two_factor_code`.
+
+### Recovery codes (Decision)
+
+- **Ten codes,** each 16 random characters shown as `xxxx-xxxx-xxxx-xxxx` (80 bits). Each works once.
+- **Stored as SHA-256 hashes, not argon2.** The standard says "hashed, like passwords"; the point is that they're never stored readable.
+  - Argon2 exists to slow down guessing of *human-chosen* passwords. An 80-bit random code can't be guessed either way.
+  - Argon2 would make every recovery login check up to 10 slow hashes, about half a second.
+- **They're shown once,** at confirm or regenerate, and never again.
+
+### Required 2FA (Decision)
+
+```go
+auth.Config{
+	OrgRoles:       orgRoles,
+	AppRoles:       appRoles,
+	TwoFactorRoles: []string{"owner", "admin", "support"}, // org or app roles
+}
+
+a.SetTwoFactorRequired(ctx, userID, true) // an individual user (the standard)
+```
+
+- **A config list, not `rbac.Roles{…}.RequireTwoFactor(…)` as design.md sketched.** `Roles` is a plain map, so the method version couldn't carry the extra information.
+- **It applies to the whole account.** Being an admin of one organization means 2FA everywhere. That's simpler, and nobody has to reason about which organization a request touches.
+- **Users who must have 2FA but haven't set it up** can still log in. Until they finish setup, every request except the 2FA setup endpoints, `GET /v1/users/me` and logging out gets `403 two_factor_setup_required`. That's the standard's "can't use the app until they do", and the app can send them straight to setup.
+- **Privileged sessions last 12 hours** (the standard, §4). That's enforced on every request, so promoting someone takes effect on their next request, not their next login.
+
+### Guessing codes, until step 8 (Decision)
+
+Rate limiting arrives in step 8. Until then, someone who already has the password could keep starting new challenges and guessing.
+
+- **The limit:** after **10 wrong codes in 15 minutes** across all of a user's challenges, logging in for that user stops issuing challenges until the 15 minutes pass (`429 rate_limited`, with `Retry-After`).
+- **It's a temporary pause, not a lockout,** in line with the standard's "slow down, don't lock out".
+- **The user is emailed when it trips:** "someone entered your password correctly but not your 2FA code; change your password". By then someone has their password.
+
+### Notices
+
+Users are emailed when 2FA is turned on or off, when recovery codes are regenerated, and when a recovery code is used (with how many are left). The standard says users SHOULD be told about new 2FA settings. The four templates join `Emails`.
+
+### Database
+
+Migration `00005`:
+
+```
+auth.totp_secrets            user_id (primary key), secret_encrypted, last_used_step,
+                             confirmed_at, created_at, updated_at
+auth.recovery_codes          id, user_id, code_hash, used_at, created_at
+auth.two_factor_challenges   id, user_id, token_hash, client, ip, user_agent,
+                             failed_attempts, expires_at, used_at, created_at
+```
+
+`auth.users.two_factor_required` already exists (migration `00001`).
+
+### New error codes
+
+| Code | Status | When |
+|---|---|---|
+| `invalid_two_factor_code` | 401 | Wrong TOTP or recovery code |
+| `two_factor_setup_required` | 403 | 2FA required but not set up yet |
+| `two_factor_required` | 403 | Turning off 2FA that's required |
+| `rate_limited` | 429 | Too many wrong codes (above) |
+
+### PRs
+
+1. `internal/totp` (with RFC 6238's test vectors), encryption, the schema, and the setup, confirm, disable and regenerate endpoints.
+2. The login challenge, verifying codes, recovery codes at login, the guessing limit, and the notices.
+3. Required 2FA (`TwoFactorRoles`, `SetTwoFactorRequired`), the setup-only restriction, and 12-hour privileged sessions.
+
+### Decisions to confirm
+
+1. **`EncryptionKey` is required for every project.** AES-256-GCM, the user ID bound in, and a key ID for future rotation.
+2. **Login with 2FA returns a secret challenge token,** which works for 5 minutes and 5 wrong codes. Codes are allowed ±30 s and are never reused.
+3. **Recovery codes are 80-bit random, stored as SHA-256** rather than argon2.
+4. **Required 2FA comes from `TwoFactorRoles` and a per-user flag, and covers the whole account.** Until it's set up, the user can only set it up.
+5. **Privileged sessions last 12 hours, checked on every request.**
+6. **10 wrong codes in 15 minutes pauses challenges for that user,** and emails them.
+7. **The verification link returns a challenge, not a session, when 2FA is on.**

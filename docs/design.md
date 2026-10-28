@@ -154,7 +154,7 @@ auth.rate_limits        key, window_start, count
 | `POST /v1/users` | Sign up with email + password | Public |
 | `GET /v1/users/me` | Current user, their organizations and roles | Session |
 | `POST /v1/sessions` | Log in with email + password. Returns a token, or a 2FA challenge | Public |
-| `POST /v1/two-factor-challenges/{id}/verify` | Finish login with a TOTP or recovery code | Public (challenge ID) |
+| `POST /v1/two-factor-challenges/verify` | Finish login with a TOTP or recovery code. The challenge token from login goes in the body (api.md §8) | Public (challenge token) |
 | `GET /v1/sessions` | List my active sessions | Session |
 | `DELETE /v1/sessions/current` | Log out | Session |
 | `DELETE /v1/sessions/{id}` | End one of my other sessions | Session |
