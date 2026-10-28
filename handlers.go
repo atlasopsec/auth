@@ -287,6 +287,16 @@ func (a *Auth) logIn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	enabled, err := twoFactorEnabled(r.Context(), a.q, row.ID)
+	if err != nil {
+		httpapi.WriteInternalError(w, r, a.log, err)
+		return
+	}
+	if enabled {
+		a.writeChallenge(w, r, row.ID, session.Client(req.Client))
+		return
+	}
+
 	ip, ua := httpapi.Client(r, a.trusted)
 	tok, s, err := a.sessions.Create(r.Context(), row.ID, session.Meta{Client: session.Client(req.Client), IP: ip, UserAgent: ua}, session.Standard)
 	if err != nil {

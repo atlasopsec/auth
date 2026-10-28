@@ -78,12 +78,15 @@ func (a *Auth) requestPasswordReset(w http.ResponseWriter, r *http.Request) {
 type confirmResetRequest struct {
 	Token    string `json:"token"`
 	Password string `json:"password"`
+	// Code is a TOTP or recovery code, required when the user has 2FA.
+	Code string `json:"code"`
 }
 
 // confirmPasswordReset sets a new password from a reset link. It also
 // verifies the email, since the user just proved they control it, and ends
 // every session. Together these let the real owner take back an account
-// someone else created with their address.
+// someone else created with their address. When the user has 2FA it also
+// takes a code, so access to their inbox alone isn't enough.
 func (a *Auth) confirmPasswordReset(w http.ResponseWriter, r *http.Request) {
 	var req confirmResetRequest
 	if err := httpapi.Decode(w, r, &req); err != nil {
@@ -112,6 +115,15 @@ func (a *Auth) confirmPasswordReset(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteInternalError(w, r, a.log, err)
 		return
 	}
+	twoFactor, err := twoFactorEnabled(ctx, a.q, t.UserID)
+	if err != nil {
+		httpapi.WriteInternalError(w, r, a.log, err)
+		return
+	}
+	if twoFactor && req.Code == "" {
+		writeValidationFailed(w, r, []httpapi.FieldError{codeRequired})
+		return
+	}
 	if fe, ok := a.checkBreached(r, "password", req.Password); !ok {
 		writeValidationFailed(w, r, []httpapi.FieldError{fe})
 		return
@@ -122,53 +134,84 @@ func (a *Auth) confirmPasswordReset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	email, err := a.resetPassword(ctx, t.UserID, t.ID, hash)
+	res, err := a.resetPassword(ctx, t.UserID, t.ID, hash, twoFactor, req.Code)
 	if errors.Is(err, emailtoken.ErrInvalid) {
 		// A concurrent request used the token first.
 		writeTokenInvalid(w, r)
 		return
 	}
 	if err != nil {
-		httpapi.WriteInternalError(w, r, a.log, err)
+		a.writeLoginCodeError(w, r, err)
+		return
+	}
+	if !res.check.ok {
+		a.wrongLoginCode(w, r, res.user, res.check)
 		return
 	}
 	a.logEvent(r, "auth: password reset", t.UserID)
-	a.sendNotice(email, a.emails.PasswordChanged)
+	if res.check.usedRecovery {
+		a.logEvent(r, "auth: recovery code used", t.UserID)
+		a.send(res.user.Email, a.emails.RecoveryCodeUsed, EmailData{AppName: a.appName, AppURL: a.appURL, RecoveryCodesLeft: int(res.recoveryCodesLeft)}, uuid.Must(uuid.NewV7()))
+	}
+	a.sendNotice(res.user.Email, a.emails.PasswordChanged)
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// resetPassword spends the token, sets the password, verifies the email,
-// and ends every session, all or nothing. It returns the user's email.
-func (a *Auth) resetPassword(ctx context.Context, userID, tokenID uuid.UUID, hash string) (string, error) {
-	tx, err := a.pool.Begin(ctx)
-	if err != nil {
-		return "", fmt.Errorf("beginning reset: %w", err)
-	}
-	// After Commit this is a no-op.
-	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
-	q := db.New(tx)
-	now := a.now().UTC().Truncate(time.Microsecond)
+type resetResult struct {
+	user              db.AuthUser
+	check             codeCheck
+	recoveryCodesLeft int64
+}
 
-	if err := emailtoken.NewManager(tx, a.now).Use(ctx, tokenID); err != nil {
-		return "", err
-	}
-	if err := q.UpdatePasswordHash(ctx, db.UpdatePasswordHashParams{ID: userID, PasswordHash: &hash, Now: now}); err != nil {
-		return "", fmt.Errorf("setting password: %w", err)
-	}
-	if err := q.MarkEmailVerified(ctx, db.MarkEmailVerifiedParams{ID: userID, Now: now}); err != nil {
-		return "", fmt.Errorf("marking email verified: %w", err)
-	}
-	if _, err := session.NewManager(tx, a.now).RevokeAll(ctx, userID); err != nil {
-		return "", err
-	}
-	row, err := q.GetUserByID(ctx, userID)
+// resetPassword checks the 2FA code if twoFactor is set, then spends the
+// token, sets the password, verifies the email, and ends every session and
+// 2FA challenge, all or nothing. A wrong code changes nothing but the
+// failure counts, and is reported in the result.
+func (a *Auth) resetPassword(ctx context.Context, userID, tokenID uuid.UUID, hash string, twoFactor bool, code string) (resetResult, error) {
+	var res resetResult
+	err := a.withTx(ctx, func(tx pgx.Tx) error {
+		q := db.New(tx)
+		var err error
+		if res.user, err = q.GetUserByID(ctx, userID); err != nil {
+			return fmt.Errorf("reading user: %w", err)
+		}
+		res.check.ok = !twoFactor
+		if twoFactor {
+			if res.check, err = a.checkLoginCode(ctx, q, userID, code); err != nil {
+				return err
+			}
+			if !res.check.ok {
+				// Committed, so the wrong code counts toward the link's
+				// failed attempts as well as the guessing limit.
+				return emailtoken.NewManager(tx, a.now).RecordFailure(ctx, tokenID)
+			}
+			if res.check.usedRecovery {
+				if res.recoveryCodesLeft, err = q.CountUnusedRecoveryCodes(ctx, userID); err != nil {
+					return fmt.Errorf("counting recovery codes: %w", err)
+				}
+			}
+		}
+
+		now := a.now().UTC().Truncate(time.Microsecond)
+		if err := emailtoken.NewManager(tx, a.now).Use(ctx, tokenID); err != nil {
+			return err
+		}
+		if err := q.UpdatePasswordHash(ctx, db.UpdatePasswordHashParams{ID: userID, PasswordHash: &hash, Now: now}); err != nil {
+			return fmt.Errorf("setting password: %w", err)
+		}
+		if err := q.MarkEmailVerified(ctx, db.MarkEmailVerifiedParams{ID: userID, Now: now}); err != nil {
+			return fmt.Errorf("marking email verified: %w", err)
+		}
+		if err := q.DeleteTwoFactorChallenges(ctx, userID); err != nil {
+			return fmt.Errorf("deleting 2FA challenges: %w", err)
+		}
+		_, err = session.NewManager(tx, a.now).RevokeAll(ctx, userID)
+		return err
+	})
 	if err != nil {
-		return "", fmt.Errorf("reading user: %w", err)
+		return resetResult{}, err
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return "", fmt.Errorf("committing reset: %w", err)
-	}
-	return row.Email, nil
+	return res, nil
 }
 
 type changePasswordRequest struct {
@@ -238,7 +281,7 @@ func (a *Auth) changePassword(w http.ResponseWriter, r *http.Request) {
 }
 
 // setPasswordKeepingSession sets the password and ends every session but
-// keepID, all or nothing.
+// keepID, and every 2FA challenge, all or nothing.
 func (a *Auth) setPasswordKeepingSession(ctx context.Context, userID, keepID uuid.UUID, hash string) error {
 	tx, err := a.pool.Begin(ctx)
 	if err != nil {
@@ -254,6 +297,10 @@ func (a *Auth) setPasswordKeepingSession(ctx context.Context, userID, keepID uui
 	}
 	if _, err := session.NewManager(tx, a.now).RevokeOthers(ctx, userID, keepID); err != nil {
 		return err
+	}
+	// A challenge proves the old password was entered.
+	if err := db.New(tx).DeleteTwoFactorChallenges(ctx, userID); err != nil {
+		return fmt.Errorf("deleting 2FA challenges: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("committing password change: %w", err)

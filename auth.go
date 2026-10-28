@@ -222,6 +222,12 @@ func New(cfg Config) (*Auth, error) {
 	if a.emails.RecoveryCodesRegenerated == nil {
 		a.emails.RecoveryCodesRegenerated = defaultRecoveryCodesRegenerated
 	}
+	if a.emails.RecoveryCodeUsed == nil {
+		a.emails.RecoveryCodeUsed = defaultRecoveryCodeUsed
+	}
+	if a.emails.TwoFactorGuessing == nil {
+		a.emails.TwoFactorGuessing = defaultTwoFactorGuessing
+	}
 	if !cfg.DisableBreachCheck {
 		a.breach = pwned.New(pwned.DefaultURL)
 	}

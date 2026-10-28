@@ -1,7 +1,6 @@
 package auth
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -123,7 +122,18 @@ func (a *Auth) confirmVerification(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tok, s, err := a.verifyAndLogIn(r, row.ID, t.ID, session.Client(req.Client))
+	twoFactor, err := twoFactorEnabled(ctx, a.q, row.ID)
+	if err == nil && twoFactor {
+		// Nothing is spent while the user is at the guessing limit, so the
+		// link still works afterwards.
+		err = a.checkPaused(ctx, a.q, row.ID)
+	}
+	if err != nil {
+		a.writeLoginCodeError(w, r, err)
+		return
+	}
+
+	tok, expires, err := a.verifyAndLogIn(r, row.ID, t.ID, session.Client(req.Client), twoFactor)
 	if errors.Is(err, emailtoken.ErrInvalid) {
 		// A concurrent request used the token first.
 		writeTokenInvalid(w, r)
@@ -134,37 +144,49 @@ func (a *Auth) confirmVerification(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.logEvent(r, "auth: email verified", row.ID)
+	if twoFactor {
+		a.logEvent(r, "auth: two-factor challenge started", row.ID)
+		writeChallengeJSON(w, r, tok, expires)
+		return
+	}
 	user := userFromRow(row)
 	user.EmailVerified = true
-	httpapi.WriteJSON(w, r, http.StatusCreated, loginResponse{User: toUserJSON(user), Token: tok, ExpiresAt: timestamp(s.ExpiresAt)})
+	httpapi.WriteJSON(w, r, http.StatusCreated, loginResponse{User: toUserJSON(user), Token: tok, ExpiresAt: timestamp(expires)})
 }
 
 // verifyAndLogIn spends the token, marks the email verified, and starts a
-// session, all or nothing.
-func (a *Auth) verifyAndLogIn(r *http.Request, userID, tokenID uuid.UUID, client session.Client) (string, session.Session, error) {
+// session, all or nothing. For a user with 2FA, it starts a 2FA challenge
+// instead of the session. It returns the session's or challenge's token
+// and when it expires.
+func (a *Auth) verifyAndLogIn(r *http.Request, userID, tokenID uuid.UUID, client session.Client, twoFactor bool) (string, time.Time, error) {
 	ctx := r.Context()
-	tx, err := a.pool.Begin(ctx)
+	var (
+		tok     string
+		expires time.Time
+	)
+	err := a.withTx(ctx, func(tx pgx.Tx) error {
+		if err := emailtoken.NewManager(tx, a.now).Use(ctx, tokenID); err != nil {
+			return err
+		}
+		q := db.New(tx)
+		if err := q.MarkEmailVerified(ctx, db.MarkEmailVerifiedParams{ID: userID, Now: a.now().UTC().Truncate(time.Microsecond)}); err != nil {
+			return fmt.Errorf("marking email verified: %w", err)
+		}
+		var err error
+		if twoFactor {
+			tok, expires, err = a.createChallenge(ctx, q, userID, client)
+			return err
+		}
+		ip, ua := httpapi.Client(r, a.trusted)
+		var s session.Session
+		tok, s, err = session.NewManager(tx, a.now).Create(ctx, userID, session.Meta{Client: client, IP: ip, UserAgent: ua}, session.Standard)
+		expires = s.ExpiresAt
+		return err
+	})
 	if err != nil {
-		return "", session.Session{}, fmt.Errorf("beginning verification: %w", err)
+		return "", time.Time{}, err
 	}
-	// After Commit this is a no-op.
-	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
-
-	if err := emailtoken.NewManager(tx, a.now).Use(ctx, tokenID); err != nil {
-		return "", session.Session{}, err
-	}
-	if err := db.New(tx).MarkEmailVerified(ctx, db.MarkEmailVerifiedParams{ID: userID, Now: a.now().UTC().Truncate(time.Microsecond)}); err != nil {
-		return "", session.Session{}, fmt.Errorf("marking email verified: %w", err)
-	}
-	ip, ua := httpapi.Client(r, a.trusted)
-	tok, s, err := session.NewManager(tx, a.now).Create(ctx, userID, session.Meta{Client: client, IP: ip, UserAgent: ua}, session.Standard)
-	if err != nil {
-		return "", session.Session{}, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return "", session.Session{}, fmt.Errorf("committing verification: %w", err)
-	}
-	return tok, s, nil
+	return tok, expires, nil
 }
 
 func writeTokenInvalid(w http.ResponseWriter, r *http.Request) {

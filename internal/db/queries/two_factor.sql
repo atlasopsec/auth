@@ -36,3 +36,44 @@ WHERE user_id = @user_id AND code_hash = @code_hash AND used_at IS NULL;
 
 -- name: CountUnusedRecoveryCodes :one
 SELECT count(*) FROM auth.recovery_codes WHERE user_id = @user_id AND used_at IS NULL;
+
+-- Also clears out the user's challenges that can no longer be used.
+-- name: DeleteSpentTwoFactorChallenges :exec
+DELETE FROM auth.two_factor_challenges
+WHERE user_id = @user_id
+  AND (used_at IS NOT NULL OR expires_at <= @now OR failed_attempts >= @max_failed_attempts);
+
+-- name: CreateTwoFactorChallenge :exec
+INSERT INTO auth.two_factor_challenges (id, user_id, token_hash, client, expires_at, created_at, updated_at)
+VALUES (@id, @user_id, @token_hash, @client, @expires_at, @now, @now);
+
+-- Locks the challenge, so concurrent requests count wrong codes and use it
+-- one at a time.
+-- name: GetTwoFactorChallengeForUpdate :one
+SELECT * FROM auth.two_factor_challenges WHERE token_hash = @token_hash FOR UPDATE;
+
+-- name: RecordTwoFactorChallengeFailure :exec
+UPDATE auth.two_factor_challenges
+SET failed_attempts = failed_attempts + 1, updated_at = @now
+WHERE id = @id;
+
+-- name: UseTwoFactorChallenge :exec
+UPDATE auth.two_factor_challenges SET used_at = @now, updated_at = @now WHERE id = @id;
+
+-- name: DeleteTwoFactorChallenges :exec
+DELETE FROM auth.two_factor_challenges WHERE user_id = @user_id;
+
+-- name: CreateTwoFactorFailure :exec
+INSERT INTO auth.two_factor_failures (id, user_id, created_at, updated_at)
+VALUES (@id, @user_id, @now, @now);
+
+-- name: DeleteOldTwoFactorFailures :exec
+DELETE FROM auth.two_factor_failures WHERE user_id = @user_id AND created_at <= @since;
+
+-- Returns the time of the user's nth most recent wrong code since @since
+-- (counting from 0), if there are that many.
+-- name: NthRecentTwoFactorFailure :one
+SELECT created_at FROM auth.two_factor_failures
+WHERE user_id = @user_id AND created_at > @since
+ORDER BY created_at DESC
+OFFSET @n LIMIT 1;

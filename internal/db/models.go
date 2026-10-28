@@ -85,6 +85,25 @@ type AuthTotpSecret struct {
 	UpdatedAt       time.Time
 }
 
+type AuthTwoFactorChallenge struct {
+	ID             uuid.UUID
+	UserID         uuid.UUID
+	TokenHash      []byte
+	Client         string
+	FailedAttempts int32
+	ExpiresAt      time.Time
+	UsedAt         *time.Time
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
+type AuthTwoFactorFailure struct {
+	ID        uuid.UUID
+	UserID    uuid.UUID
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
 type AuthUser struct {
 	ID                uuid.UUID
 	Email             string

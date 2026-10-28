@@ -29,7 +29,17 @@ Every project needs an `AUTH_ENCRYPTION_KEY`: 32 random bytes, base64-encoded, p
 openssl rand -base64 32
 ```
 
-Keep it in Railway's variables with the other secrets, and **back it up**. If it's lost, every user who has 2FA on has to set it up again.
+Keep it in Railway's variables with the other secrets, and **back it up**. If it's lost, every user who has 2FA on has to set it up again. Until then they can't log in; turn their 2FA off with `ResetTwoFactor`.
+
+## Users locked out of 2FA
+
+A user who has lost both their authenticator and their recovery codes can't get back in by themselves. After confirming who they are some other way, support turns their 2FA off from admin tooling:
+
+```go
+err := a.ResetTwoFactor(ctx, userID) // also ends their sessions and emails them
+```
+
+There's no endpoint for it, on purpose.
 
 ## Design
 

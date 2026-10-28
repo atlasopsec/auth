@@ -70,6 +70,8 @@ paths:
       description: >
         Unknown emails, wrong passwords, and accounts without a password
         all get the same `invalid_credentials` response, in the same time.
+        For a user with 2FA, a correct password returns a challenge instead
+        of a session; finish with `POST /v1/two-factor-challenges/verify`.
       tags: [sessions]
       security: []
       requestBody:
@@ -79,6 +81,7 @@ paths:
             schema:
               $ref: "#/components/schemas/Credentials"
       responses:
+        "200": { $ref: "#/components/responses/TwoFactorChallenge" }
         "201":
           description: Logged in.
           content:
@@ -99,6 +102,7 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
         "413": { $ref: "#/components/responses/PayloadTooLarge" }
         "422": { $ref: "#/components/responses/ValidationFailed" }
+        "429": { $ref: "#/components/responses/RateLimited" }
         "500": { $ref: "#/components/responses/InternalError" }
     get:
       operationId: listSessions
@@ -158,7 +162,8 @@ paths:
       description: >
         Takes the token from the verification link (the part after
         `#token=`) and the account's password. After 5 wrong passwords the
-        token stops working.
+        token stops working. For a user with 2FA, it verifies the email and
+        returns a challenge instead of a session.
       tags: [email-verifications]
       security: []
       requestBody:
@@ -174,6 +179,7 @@ paths:
                 password: { type: string }
                 client: { type: string, enum: [web, mobile] }
       responses:
+        "200": { $ref: "#/components/responses/TwoFactorChallenge" }
         "201":
           description: Verified and logged in.
           content:
@@ -193,6 +199,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+        "429": { $ref: "#/components/responses/RateLimited" }
         "500": { $ref: "#/components/responses/InternalError" }
 
   /v1/password-resets:
@@ -223,7 +230,10 @@ paths:
       description: >
         Takes the token from the reset link (the part after `#token=`).
         Sets the password, marks the email verified, ends every session,
-        and emails a notice. Doesn't log the user in.
+        and emails a notice. Doesn't log the user in. When the user has 2FA
+        it also needs a code; without one the response is `422` with
+        `code: required`, and the page should ask for it and send again. A
+        wrong code counts toward the link's 5 failed attempts.
       tags: [password-resets]
       security: []
       requestBody:
@@ -237,18 +247,21 @@ paths:
               properties:
                 token: { type: string }
                 password: { type: string, description: 12 to 256 characters, not in a known breach. }
+                code: { type: string, description: A TOTP code or a recovery code. Required when the user has 2FA. }
       responses:
         "204": { description: Password set. }
         "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/InvalidTwoFactorCode" }
         "413": { $ref: "#/components/responses/PayloadTooLarge" }
         "422":
           description: >
             `token_invalid_or_expired` for a bad, used, or expired token, or
             `validation_failed` (`password`: `too_short`, `too_long`,
-            `breached`).
+            `breached`; `code`: `required`).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+        "429": { $ref: "#/components/responses/RateLimited" }
         "500": { $ref: "#/components/responses/InternalError" }
 
   /v1/users/me/password:
@@ -765,6 +778,48 @@ paths:
         "422": { $ref: "#/components/responses/ValidationFailed" }
         "500": { $ref: "#/components/responses/InternalError" }
 
+  /v1/two-factor-challenges/verify:
+    post:
+      operationId: verifyTwoFactorChallenge
+      summary: Finish logging in with 2FA
+      description: >
+        With the challenge from the password step and a TOTP or recovery
+        code. A challenge works for 5 minutes and 5 wrong codes; after
+        that, log in with the password again. Using a recovery code emails
+        the user how many are left.
+      tags: [sessions]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [challenge_token, code]
+              properties:
+                challenge_token: { type: string }
+                code: { type: string, description: A TOTP code or a recovery code. }
+      responses:
+        "201":
+          description: Logged in.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LoginResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401":
+          description: >
+            `invalid_two_factor_code` for a wrong code, or
+            `two_factor_challenge_invalid` for a bad, used, or expired
+            challenge, or one with 5 wrong codes.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
   /v1/sessions/current:
     delete:
       operationId: logOut
@@ -987,6 +1042,36 @@ components:
                 minItems: 10
                 maxItems: 10
                 items: { type: string, example: ABCD-EFGH-IJKL-MNOP }
+    TwoFactorChallenge:
+      description: >
+        The password is correct, and the user has 2FA. Send the challenge
+        and a code to `POST /v1/two-factor-challenges/verify`.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [two_factor_required, challenge_token, expires_at]
+            properties:
+              two_factor_required: { type: boolean, const: true }
+              challenge_token:
+                type: string
+                description: Proves the password step. Keep it secret, like a session token.
+              expires_at: { type: string, format: date-time }
+    InvalidTwoFactorCode:
+      description: "`invalid_two_factor_code`: the code is wrong or was already used."
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    RateLimited:
+      description: >
+        `rate_limited`: 10 wrong 2FA codes in 15 minutes paused code checks
+        for this user. Try again after `Retry-After` seconds.
+      headers:
+        Retry-After:
+          schema: { type: integer }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
     TwoFactorConflict:
       description: >
         `two_factor_already_enabled`, `two_factor_not_enabled`, or

@@ -22,6 +22,7 @@ func (a *Auth) registerTwoFactor(mux *http.ServeMux) {
 	mux.Handle("POST /v1/users/me/two-factor/confirm", endpoint(a.Authenticated(http.HandlerFunc(a.confirmTwoFactor))))
 	mux.Handle("DELETE /v1/users/me/two-factor", endpoint(a.Authenticated(http.HandlerFunc(a.disableTwoFactor))))
 	mux.Handle("POST /v1/users/me/two-factor/recovery-codes", endpoint(a.Authenticated(http.HandlerFunc(a.regenerateRecoveryCodes))))
+	mux.Handle("POST /v1/two-factor-challenges/verify", endpoint(http.HandlerFunc(a.verifyChallenge)))
 }
 
 type twoFactorState struct {
@@ -36,11 +37,11 @@ func (a *Auth) twoFactorStatus(ctx context.Context, userID uuid.UUID) (twoFactor
 	if err != nil {
 		return twoFactorState{}, fmt.Errorf("reading user: %w", err)
 	}
-	secret, err := a.q.GetTOTPSecret(ctx, userID)
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return twoFactorState{}, fmt.Errorf("reading 2FA: %w", err)
+	enabled, err := twoFactorEnabled(ctx, a.q, userID)
+	if err != nil {
+		return twoFactorState{}, err
 	}
-	return twoFactorState{enabled: err == nil && secret.ConfirmedAt != nil, required: user.TwoFactorRequired}, nil
+	return twoFactorState{enabled: enabled, required: user.TwoFactorRequired}, nil
 }
 
 // checkPassword verifies a user's current password. Accounts without one
@@ -358,13 +359,19 @@ func (a *Auth) replaceRecoveryCodes(ctx context.Context, q *db.Queries, userID u
 
 // inTx runs f in a transaction, committing if it returns nil.
 func (a *Auth) inTx(ctx context.Context, f func(q *db.Queries) error) error {
+	return a.withTx(ctx, func(tx pgx.Tx) error { return f(db.New(tx)) })
+}
+
+// withTx is inTx for work that needs the transaction itself, such as
+// creating a session.
+func (a *Auth) withTx(ctx context.Context, f func(tx pgx.Tx) error) error {
 	tx, err := a.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("beginning transaction: %w", err)
 	}
 	// After Commit this is a no-op.
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
-	if err := f(db.New(tx)); err != nil {
+	if err := f(tx); err != nil {
 		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
