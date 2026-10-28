@@ -2,7 +2,7 @@
 
 The module's public Go API and the HTTP endpoints it serves.
 
-> **Status: sketch for review.** Covers build step 3 (sign up, log in, log out, sessions). Later steps (email verification, RBAC, 2FA, OAuth) add to it but don't change what's here. Sections marked **(Decision)** need sign-off before code is written.
+> **Status: approved.** Covers build step 3 (sign up, log in, log out, sessions), plus how sign-up changes when email verification arrives in step 4. Later steps (RBAC, 2FA, OAuth) add to it but don't change what's here. Sections marked **(Decision)** were confirmed in review; see §5.
 
 Once a name below is released, changing or removing it is a breaking change (a new major version), so this is the moment to get it right.
 
@@ -29,6 +29,11 @@ type Config struct {
 	Logger *slog.Logger     // default: slog.Default()
 	Now    func() time.Time // default: time.Now; for tests
 
+	// AllowUnverifiedLogin lets users log in before verifying their email,
+	// and makes sign-up log them in immediately. Off by default: see
+	// "Verify first" in §2. Added in step 4.
+	//   AllowUnverifiedLogin bool
+
 	// Added in later steps: Mailer, AppURL, Roles, OAuth, EncryptionKey.
 }
 
@@ -37,6 +42,11 @@ type Hooks struct {
 	// OnUserCreated runs inside the sign-up transaction. Returning an error
 	// cancels the sign-up, so a project's own rows (e.g. a profile) are
 	// created together with the user or not at all.
+	//
+	// The hook must write through tx, not the project's own pool: writes
+	// through the pool aren't part of the transaction and wouldn't be
+	// undone. Keep it quick, since the transaction stays open while it
+	// runs. It runs for every new user, including OAuth sign-ups (step 7).
 	OnUserCreated func(ctx context.Context, tx pgx.Tx, u User) error
 }
 
@@ -110,7 +120,7 @@ All follow the [API design standard](https://github.com/jakefrenzel/engineering-
 
 | Endpoint | Purpose | Auth | Success |
 |---|---|---|---|
-| `POST /v1/users` | Sign up | Public | `201` |
+| `POST /v1/users` | Sign up | Public | `202` (`201` with `AllowUnverifiedLogin`) |
 | `POST /v1/sessions` | Log in | Public | `201` |
 | `GET /v1/users/me` | Current user | Session | `200` |
 | `GET /v1/sessions` | My active sessions | Session | `200` |
@@ -126,6 +136,32 @@ The session token goes in `Authorization: Bearer <token>`, from Next.js (read fr
 { "email": "ada@example.com", "password": "correct horse battery staple", "client": "web" }
 ```
 
+- `client` is required: `web` or `mobile`.
+- The email is trimmed and validated (a single address, at most 254 characters) and stored as entered. Uniqueness ignores case.
+- The password must pass the length policy (12–256 characters).
+
+#### Verify first: the default (Decision)
+
+Sign-up creates the account and emails a verification link. It doesn't log the user in.
+
+```json
+202 Accepted
+{ "verification_required": true }
+```
+
+- **The response is identical whether or not the email is already in use**, in body, status, and timing. If it's in use, nothing is created and the owner of that address gets an email instead ("someone tried to sign up with your email; log in or reset your password"). So sign-up never reveals whether an account exists.
+- Nobody can claim an account for an email they don't control.
+- Logging in to an unverified account with the correct password returns `403 email_not_verified`, so the client can offer to resend the link. A wrong password still returns `invalid_credentials`, so this reveals nothing to someone who doesn't know the password.
+
+| Error | Status | When |
+|---|---|---|
+| `validation_failed` | 422 | Bad email, password too short or long, bad `client`. `details` lists each field |
+| `bad_request` | 400 | Malformed JSON or unknown fields |
+
+#### Immediate login: `AllowUnverifiedLogin`
+
+For projects that choose a faster first experience over these protections. Sign-up logs the user in, unverified:
+
 ```json
 201 Created
 {
@@ -135,18 +171,21 @@ The session token goes in `Authorization: Bearer <token>`, from Next.js (read fr
 }
 ```
 
-- **Signing up also logs the user in (Decision).** They're unverified until the verification step (build step 4) exists; unverified accounts can't do anything sensitive.
-- `client` is required: `web` or `mobile`.
-- The email is trimmed and validated (a single address, at most 254 characters) and stored as entered. Uniqueness ignores case.
-- The password must pass the length policy (12–256 characters).
-
 | Error | Status | When |
 |---|---|---|
-| `validation_failed` | 422 | Bad email, password too short or long, bad `client`. `details` lists each field |
-| `email_taken` | 409 | An account already uses that email |
-| `bad_request` | 400 | Malformed JSON or unknown fields |
+| `validation_failed` | 422 | As above |
+| `email_taken` | 409 | An account already uses that email. This reveals that the account exists, which is part of the trade-off |
+| `bad_request` | 400 | As above |
 
-`email_taken` reveals that an account exists. Every sign-up form does this, and it can't be avoided without email verification first. The login and password-reset endpoints never do. Rate limiting (build step 8) limits enumeration.
+Unverified accounts can't do anything sensitive in either mode.
+
+#### Build order
+
+Step 3 has no mailer, so it ships the immediate-login behavior only. Step 4 adds the mailer and verification, makes verify first the default, and adds `AllowUnverifiedLogin`. Both happen before `v1.0.0`, so no released version ever defaults to immediate login.
+
+#### Account pre-hijacking (rule for step 7)
+
+With `AllowUnverifiedLogin`, an attacker can sign up with someone else's email and a password they know. If the real owner later signs in with Google using that email and the accounts were linked, the attacker's password would still work. So when OAuth finds an existing account with the same email that **isn't verified**, it must not link to it as-is: it deletes that account's password and sessions first, or refuses. Verified accounts link only when the provider also says the email is verified, as the standard already requires.
 
 ### `POST /v1/sessions`: log in
 
@@ -162,6 +201,7 @@ The session token goes in `Authorization: Bearer <token>`, from Next.js (read fr
 | Error | Status | When |
 |---|---|---|
 | `invalid_credentials` | 401 | Unknown email, wrong password, or an OAuth-only account. **Same response and same timing for all three** |
+| `email_not_verified` | 403 | Correct password, but the email isn't verified yet (verify first mode only, from step 4) |
 | `validation_failed` | 422 | Missing fields, bad `client` |
 
 - The response time doesn't reveal whether the email exists (`SimulateVerify` for unknown emails).
@@ -210,7 +250,7 @@ Most recently used first. `next_cursor` is always `null`: a user has a handful o
 
 | Feature | Step |
 |---|---|
-| Email verification, password reset and change, the `Mailer` | 4 |
+| Email verification, verify first as the default, `AllowUnverifiedLogin`, password reset and change, the `Mailer` | 4 |
 | Roles, organizations, `Require`, `CheckRoutes` | 5 |
 | 2FA (the second login response shape) | 6 |
 | OAuth | 7 |
@@ -219,12 +259,14 @@ Most recently used first. `next_cursor` is always `null`: a user has a handful o
 
 **Until step 8, there's no rate limiting.** Nothing should be deployed for real users before `v1.0.0` anyway, but it's the biggest gap in the meantime.
 
-## 5. Decisions to confirm
+## 5. Decisions
+
+Confirmed in review on 2026-10-28:
 
 1. **`Register(mux)`** adds routes to the project's `ServeMux`, rather than a single mounted `Handler()`.
 2. **`Authenticated(h)` now, `Require(permission, h)` with RBAC**, plus `Public(h)`.
-3. **`OnUserCreated` runs inside the sign-up transaction**, so a hook failure cancels the sign-up.
-4. **Sign-up logs the user in immediately.**
+3. **`OnUserCreated` runs inside the sign-up transaction**, so a hook failure cancels the sign-up. Hooks write through `tx` and stay quick.
+4. **Verify first is the default; immediate login is opt-in** with `AllowUnverifiedLogin`. Step 3 ships immediate login until step 4 adds verification.
 5. **`client` is a required body field** on sign-up and login.
-6. **Unknown JSON fields are rejected.**
+6. **Unknown JSON fields are rejected.** Deploy the API before app versions that send new fields.
 7. **The forwarded user agent header is named `X-Forwarded-User-Agent`.**

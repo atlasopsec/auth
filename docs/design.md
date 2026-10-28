@@ -155,7 +155,7 @@ auth.rate_limits        key, window_start, count
 | `DELETE /v1/sessions/current` | Log out | Session |
 | `DELETE /v1/sessions/{id}` | End one of my other sessions | Session |
 | `DELETE /v1/sessions` | Log out everywhere | Session |
-| `POST /v1/email-verifications` / `.../{token}/confirm` | Send / confirm email verification | Session / Public |
+| `POST /v1/email-verifications` / `.../{token}/confirm` | Send / confirm email verification. Sending takes an email and always returns `202`, like password reset, so it works before the user can log in | Public |
 | `POST /v1/password-resets` / `.../{token}/confirm` | Request / complete password reset | Public |
 | `POST /v1/users/me/password` | Change password (requires current password) | Session |
 | `POST /v1/users/me/two-factor` / `.../confirm` / `DELETE` | Set up, confirm, turn off 2FA | Session |
