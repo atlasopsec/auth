@@ -23,7 +23,7 @@ The design follows the auth standard in [`jakefrenzel/engineering-standards`](ht
 
 ## Design
 
-How the module is structured and how projects use it: [docs/design.md](docs/design.md).
+How the module is structured and how projects use it: [docs/design.md](docs/design.md). The public Go API and HTTP endpoints: [docs/api.md](docs/api.md).
 
 ## Roadmap
 
