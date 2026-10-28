@@ -21,6 +21,10 @@ Built for Go APIs that own their own Postgres database, with Next.js web apps an
 
 The design follows the auth standard in [`jakefrenzel/engineering-standards`](https://github.com/jakefrenzel/engineering-standards).
 
+## Design
+
+How the module is structured and how projects use it: [docs/design.md](docs/design.md).
+
 ## Roadmap
 
 - [ ] Password hashing and secure token generation
