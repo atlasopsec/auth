@@ -193,7 +193,7 @@ var roles = rbac.Roles{
 ```
 
 - Permissions are checked against the user's role **in the current organization**. The organization comes from the `X-Organization-ID` request header, and the module verifies the user is actually a member.
-- **Deny by default:** `a.Handler()` and `a.Require`/`a.Public` record every route. `a.CheckRoutes(mux)` fails if a route is registered without one, and projects call it in a test so a forgotten permission breaks CI rather than production.
+- **Deny by default:** `a.Protect(mux)` wraps the project's whole router and refuses (`500`, logged) any request whose route wasn't wrapped by `Public`, `Authenticated`, `Require`, or `RequireOrg`, so a forgotten permission fails closed. Go's `ServeMux` can't list its routes, which rules out a `CheckRoutes` test helper. See api.md §7.
 - Users without organizations (simple consumer apps) are supported; such projects just don't use organization-scoped permissions.
 
 ## 7. Email
@@ -254,7 +254,7 @@ Each step is one or more small PRs:
 2. Migrations, `internal/db`, `internal/session`
 3. `auth.New`, `Require`, `UserFrom`, plus sign up, log in, log out, sessions endpoints, and the error format
 4. Email verification, password reset, password change, email change, `auth/mail`, `auth/mail/resend`
-5. RBAC: `auth/rbac`, organizations, memberships, `CheckRoutes`
+5. RBAC: `auth/rbac`, organizations, memberships, invitations, `Protect`
 6. 2FA (TOTP, recovery codes, challenges)
 7. OAuth (Google, GitHub, Apple)
 8. Rate limiting, the event log, security notice emails
