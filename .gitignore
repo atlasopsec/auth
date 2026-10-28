@@ -1,0 +1,19 @@
+# Binaries and build output
+*.exe
+*.test
+*.out
+/bin/
+/dist/
+
+# Coverage
+coverage.*
+
+# Local environment files. Never commit real secrets
+.env
+.env.*
+!.env.example
+
+# Editors and OS
+.idea/
+.vscode/
+.DS_Store
