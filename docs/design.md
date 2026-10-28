@@ -88,11 +88,15 @@ func listInvoices(w http.ResponseWriter, r *http.Request) {
 |---|---|---|
 | `auth` (root) | Yes | `New`, `Config`, `Migrate`, `User`, `Organization`, `Require`/`Public`, `UserFrom`, `Handler`, hooks, error codes |
 | `auth/rbac` | Yes | `Permission`, `Role`, role definitions, `Can` |
-| `auth/mail` | Yes | The `Mailer` interface and default email templates |
+| `auth/mail` | Yes | The `Mailer` interface, `Message`, and `Writer` for local development |
 | `auth/mail/resend` | Yes | Resend adapter, in its own package so projects that don't use Resend don't pull it in |
+| `auth/mail/mailtest` | Yes | `Recorder`, a fake `Mailer` for tests |
 | `internal/password` | No | argon2id hashing, verification, re-hash detection, breached-password check |
 | `internal/token` | No | Random tokens, SHA-256 hashing, constant-time compare |
 | `internal/session` | No | Create, validate, extend, revoke sessions |
+| `internal/emailtoken` | No | Single-use email tokens (verify, reset, change email), with the send cooldown |
+| `internal/sender` | No | Sends email in the background, with retries |
+| `internal/httpapi` | No | Error format, strict JSON decoding, request IDs, client IP behind proxies |
 | `internal/totp` | No | TOTP and recovery codes |
 | `internal/oauth` | No | Google, GitHub, Apple flows with PKCE and `state` |
 | `internal/ratelimit` | No | Postgres-backed rate limiting |

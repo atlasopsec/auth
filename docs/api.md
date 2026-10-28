@@ -2,7 +2,7 @@
 
 The module's public Go API and the HTTP endpoints it serves.
 
-> **Status:** §1–5 (build step 3) are approved and built. §6 (build step 4: email) is a **sketch for review**; its **(Decision)** items need sign-off before code is written. Later steps (RBAC, 2FA, OAuth) add to this but don't change what's here.
+> **Status: approved.** §1–5 cover build step 3 (built). §6 covers build step 4 (email), approved and being built. Sections marked **(Decision)** were confirmed in review. Later steps (RBAC, 2FA, OAuth) add to this but don't change what's here.
 
 Once a name below is released, changing or removing it is a breaking change (a new major version), so this is the moment to get it right.
 
@@ -273,7 +273,7 @@ Confirmed in review on 2026-10-28:
 
 ---
 
-## 6. Step 4: email (sketch for review)
+## 6. Step 4: email
 
 Step 4 adds everything that needs email: verification (and verify first as the default), password reset, password change, email change, and the breached-password check. It follows the [auth standard](https://github.com/jakefrenzel/engineering-standards/blob/main/standards/auth.md) §3 and §11.
 
@@ -508,7 +508,9 @@ New `details` codes: `breached`, `incorrect`.
 3. Password reset and change, plus the breach check.
 4. Email change.
 
-### Decisions to confirm
+### Decisions
+
+Confirmed in review on 2026-10-28:
 
 1. **Emails are sent in the background** after responding, not through an outbox table; `Close` waits for them on shutdown.
 2. **Plain-text default emails**, overridable per email.

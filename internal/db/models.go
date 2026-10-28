@@ -11,6 +11,19 @@ import (
 	"github.com/google/uuid"
 )
 
+type AuthEmailToken struct {
+	ID             uuid.UUID
+	UserID         uuid.UUID
+	Kind           string
+	TokenHash      []byte
+	NewEmail       *string
+	FailedAttempts int32
+	ExpiresAt      time.Time
+	UsedAt         *time.Time
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
 type AuthSession struct {
 	ID                uuid.UUID
 	UserID            uuid.UUID
