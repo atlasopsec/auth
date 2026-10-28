@@ -24,6 +24,22 @@ type AuthEmailToken struct {
 	UpdatedAt      time.Time
 }
 
+type AuthMembership struct {
+	ID             uuid.UUID
+	OrganizationID uuid.UUID
+	UserID         uuid.UUID
+	Role           string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
+type AuthOrganization struct {
+	ID        uuid.UUID
+	Name      string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
 type AuthSession struct {
 	ID                uuid.UUID
 	UserID            uuid.UUID
@@ -46,4 +62,11 @@ type AuthUser struct {
 	TwoFactorRequired bool
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
+}
+
+type AuthUserRole struct {
+	UserID    uuid.UUID
+	Role      string
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }

@@ -19,6 +19,7 @@ import (
 	"github.com/atlasopsec/auth/internal/sender"
 	"github.com/atlasopsec/auth/internal/session"
 	"github.com/atlasopsec/auth/mail"
+	"github.com/atlasopsec/auth/rbac"
 )
 
 // Config configures the module. DB, Mailer, AppURL, and AppName are
@@ -68,6 +69,16 @@ type Config struct {
 	// characters of the password's SHA-1 hash, and is skipped if the API
 	// doesn't answer within 2 seconds.
 	DisableBreachCheck bool
+
+	// OrgRoles are the roles a user can have in an organization, checked
+	// by RequireOrg. They must include "owner", which always has every
+	// permission. Leave nil if the app has no organizations.
+	OrgRoles rbac.Roles
+
+	// AppRoles are roles that apply across the whole app, such as staff
+	// roles, checked by Require. Users have no app role until SetAppRole
+	// gives them one. Leave nil if the app doesn't need them.
+	AppRoles rbac.Roles
 }
 
 // Hooks let a project react to auth events.
@@ -100,7 +111,9 @@ type Auth struct {
 	allowUnverified bool
 	emails          Emails
 	// breach is nil when the breach check is disabled.
-	breach breachChecker
+	breach   breachChecker
+	orgRoles rbac.Roles
+	appRoles rbac.Roles
 }
 
 // breachChecker is implemented by *pwned.Checker, and faked in tests.
@@ -129,6 +142,15 @@ func New(cfg Config) (*Auth, error) {
 			return nil, fmt.Errorf("auth: invalid trusted proxy prefix %v", p)
 		}
 	}
+	if err := cfg.OrgRoles.Validate(); err != nil {
+		return nil, fmt.Errorf("auth: Config.OrgRoles: %w", err)
+	}
+	if cfg.OrgRoles != nil && !cfg.OrgRoles.Defines(OwnerRole) {
+		return nil, errors.New(`auth: Config.OrgRoles must define an "owner" role`)
+	}
+	if err := cfg.AppRoles.Validate(); err != nil {
+		return nil, fmt.Errorf("auth: Config.AppRoles: %w", err)
+	}
 	a := &Auth{
 		pool:            cfg.DB,
 		q:               db.New(cfg.DB),
@@ -140,6 +162,8 @@ func New(cfg Config) (*Auth, error) {
 		appName:         cfg.AppName,
 		allowUnverified: cfg.AllowUnverifiedLogin,
 		emails:          cfg.Emails,
+		orgRoles:        cfg.OrgRoles,
+		appRoles:        cfg.AppRoles,
 	}
 	if a.log == nil {
 		a.log = slog.Default()

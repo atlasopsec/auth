@@ -646,7 +646,7 @@ Members are added by email invitation:
 
 ### Database
 
-Migration `00003` (new tables only):
+Migrations `00003` (organizations, memberships, app roles) and `00004` (invitations, with the invitations PR). New tables only:
 
 ```
 auth.organizations   id, name, created_at, updated_at
