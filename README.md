@@ -29,8 +29,8 @@ How the module is structured and how projects use it: [docs/design.md](docs/desi
 
 - [x] Password hashing and secure token generation
 - [x] Database schema, embedded migrations, and sessions
-- [ ] HTTP middleware (cookies, bearer tokens, error responses)
-- [ ] Sign-up, login, email verification, and password reset
+- [x] HTTP middleware, sign-up, login, and session endpoints
+- [ ] Email verification and password reset
 - [ ] Roles, permissions, and organizations
 - [ ] Two-factor authentication (TOTP)
 - [ ] OAuth: Google, GitHub, Apple

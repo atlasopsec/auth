@@ -1,0 +1,253 @@
+# The endpoints served by Auth.Register. Projects can merge these paths into
+# their own api/openapi.yaml. See docs/api.md for the design.
+openapi: 3.1.0
+info:
+  title: atlasopsec/auth
+  version: 0.1.0
+  description: Sign up, log in, and session management.
+
+paths:
+  /v1/users:
+    post:
+      operationId: signUp
+      summary: Sign up
+      description: >
+        Creates an account and logs the user in. Until email verification
+        exists (build step 4), new accounts start unverified.
+      tags: [users]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Credentials" }
+      responses:
+        "201":
+          description: Account created and logged in.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LoginResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "409":
+          description: "`email_taken`: an account already uses this email."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /v1/users/me:
+    get:
+      operationId: getCurrentUser
+      summary: The logged-in user
+      tags: [users]
+      responses:
+        "200":
+          description: The logged-in user.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /v1/sessions:
+    post:
+      operationId: logIn
+      summary: Log in
+      description: >
+        Unknown emails, wrong passwords, and accounts without a password
+        all get the same `invalid_credentials` response, in the same time.
+      tags: [sessions]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Credentials"
+      responses:
+        "201":
+          description: Logged in.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LoginResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401":
+          description: "`invalid_credentials`: the email or password is incorrect."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+    get:
+      operationId: listSessions
+      summary: My active sessions
+      description: Most recently used first. Not paginated; `next_cursor` is always null.
+      tags: [sessions]
+      responses:
+        "200":
+          description: The user's active sessions.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, next_cursor]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/SessionInfo" }
+                  next_cursor: { type: "null" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "500": { $ref: "#/components/responses/InternalError" }
+    delete:
+      operationId: logOutEverywhere
+      summary: Log out everywhere
+      description: Ends every session the user has, including the current one.
+      tags: [sessions]
+      responses:
+        "204": { description: Logged out everywhere. }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /v1/sessions/current:
+    delete:
+      operationId: logOut
+      summary: Log out
+      tags: [sessions]
+      responses:
+        "204": { description: Logged out. }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /v1/sessions/{id}:
+    delete:
+      operationId: endSession
+      summary: End one of my sessions
+      tags: [sessions]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "204": { description: Session ended. }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "404":
+          description: "`not_found`: no such session, or it belongs to someone else."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+security:
+  - session: []
+
+components:
+  securitySchemes:
+    session:
+      type: http
+      scheme: bearer
+      description: >
+        The session token from sign-up or login. Next.js reads it from the
+        __Host-session cookie; mobile apps from secure storage.
+
+  schemas:
+    Credentials:
+      type: object
+      additionalProperties: false
+      required: [email, password, client]
+      properties:
+        email: { type: string, maxLength: 254, example: ada@example.com }
+        password:
+          type: string
+          description: 12 to 256 characters when signing up.
+        client: { type: string, enum: [web, mobile] }
+
+    User:
+      type: object
+      required: [id, email, email_verified, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string }
+        email_verified: { type: boolean }
+        created_at: { type: string, format: date-time }
+
+    LoginResponse:
+      type: object
+      required: [user, token, expires_at]
+      properties:
+        user: { $ref: "#/components/schemas/User" }
+        token:
+          type: string
+          description: The session token. Returned only here; it can't be recovered later.
+        expires_at:
+          type: string
+          format: date-time
+          description: When the session ends if it isn't used. Using it pushes this forward.
+
+    SessionInfo:
+      type: object
+      required: [id, client, ip, user_agent, last_used_at, expires_at, created_at, is_current]
+      properties:
+        id: { type: string, format: uuid }
+        client: { type: string, enum: [web, mobile] }
+        ip: { type: [string, "null"] }
+        user_agent: { type: [string, "null"] }
+        last_used_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+        is_current:
+          type: boolean
+          description: Whether this is the session making the request.
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, request_id, details]
+          properties:
+            code: { type: string }
+            message: { type: string }
+            request_id: { type: string }
+            details:
+              type: [array, "null"]
+              items:
+                type: object
+                required: [field, code, message]
+                properties:
+                  field: { type: string }
+                  code:
+                    type: string
+                    enum: [required, invalid_format, invalid_value, too_short, too_long]
+                  message: { type: string }
+
+  responses:
+    BadRequest:
+      description: "`bad_request`: malformed JSON, wrong types, or unknown fields."
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    PayloadTooLarge:
+      description: "`payload_too_large`: the body is over 64 KB."
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    ValidationFailed:
+      description: "`validation_failed`: `details` lists each invalid field."
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Unauthenticated:
+      description: "`unauthenticated`: no valid session."
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    InternalError:
+      description: "`internal_error`: a bug on our side. Details are only in the logs."
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
