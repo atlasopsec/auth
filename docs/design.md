@@ -97,6 +97,7 @@ func listInvoices(w http.ResponseWriter, r *http.Request) {
 | `internal/oauth` | No | Google, GitHub, Apple flows with PKCE and `state` |
 | `internal/ratelimit` | No | Postgres-backed rate limiting |
 | `internal/db` | No | sqlc-generated queries |
+| `internal/migrate` | No | Applies the embedded migrations; `auth.Migrate` wraps it |
 | `internal/migrations` | No | goose SQL migrations, embedded and applied by `auth.Migrate` |
 
 Keeping almost everything in `internal/` means projects **can't** reach into the security-critical parts directly. The public API stays small, which also makes it easier to keep backward compatible.
@@ -245,8 +246,8 @@ A small template in this repo (`templates/nextjs/`), copied into projects, provi
 Each step is one or more small PRs:
 
 1. `internal/token` and `internal/password`
-2. Migrations, `internal/db`, `internal/session`, `auth.New`, `Require`, `UserFrom`
-3. Sign up, log in, log out, sessions endpoints, and the error format
+2. Migrations, `internal/db`, `internal/session`
+3. `auth.New`, `Require`, `UserFrom`, plus sign up, log in, log out, sessions endpoints, and the error format
 4. Email verification, password reset, password change, `auth/mail`, `auth/mail/resend`
 5. RBAC: `auth/rbac`, organizations, memberships, `CheckRoutes`
 6. 2FA (TOTP, recovery codes, challenges)

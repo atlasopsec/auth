@@ -1,0 +1,29 @@
+# sqlc generates type-safe Go from the SQL in internal/db/queries.
+# The schema comes straight from the goose migrations.
+# Regenerate with: sqlc generate
+version: "2"
+sql:
+  - engine: postgresql
+    schema:
+      - internal/db/schema_prelude.sql
+      - internal/migrations
+    queries: internal/db/queries
+    gen:
+      go:
+        package: db
+        out: internal/db
+        sql_package: pgx/v5
+        emit_interface: false
+        emit_exact_table_names: false
+        # Nullable columns become pointers (*string) instead of pgtype wrappers.
+        emit_pointers_for_null_types: true
+        overrides:
+          - db_type: uuid
+            go_type: github.com/google/uuid.UUID
+          - db_type: timestamptz
+            go_type: time.Time
+          - db_type: timestamptz
+            nullable: true
+            go_type:
+              type: time.Time
+              pointer: true

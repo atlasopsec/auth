@@ -21,6 +21,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
+
+	"github.com/atlasopsec/auth/internal/migrate"
 )
 
 // image is the Postgres version used in tests when no database URL is given.
@@ -122,4 +124,15 @@ func withDatabase(raw, name string) (string, error) {
 	}
 	u.Path = "/" + name
 	return u.String(), nil
+}
+
+// NewMigrated returns a pool connected to a new database with the module's
+// migrations applied.
+func NewMigrated(t testing.TB) *pgxpool.Pool {
+	t.Helper()
+	pool := New(t)
+	if err := migrate.Run(context.Background(), pool); err != nil {
+		t.Fatalf("testdb: migrating: %v", err)
+	}
+	return pool
 }
