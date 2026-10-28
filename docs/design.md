@@ -2,7 +2,7 @@
 
 How the auth module is structured, and how a project's Go API uses it. The **what** (security requirements) is defined in the [auth standard](https://github.com/jakefrenzel/engineering-standards/blob/main/standards/auth.md); this doc is the **how**.
 
-> **Status: draft for review.** Sections marked **(Decision)** are choices to confirm before code is written.
+> **Status: approved.** The design decisions are recorded in [§13](#13-decisions). Details may still change as the code is built; any change to the exported API or the database layout updates this doc in the same PR.
 
 ---
 
@@ -103,7 +103,7 @@ Keeping almost everything in `internal/` means projects **can't** reach into the
 
 ## 4. Database
 
-### Tables live in their own Postgres schema (Decision)
+### Tables live in their own Postgres schema
 
 All module tables live in a Postgres **schema** named `auth`, separate from the project's tables in `public`:
 
@@ -205,8 +205,8 @@ type Mailer interface {
 
 ## 8. Other design choices
 
-- **Rate limiting is stored in Postgres** (Decision): it works across multiple API instances without adding Redis. Auth endpoints are low-volume, so the database load is small.
-- **TOTP is implemented in the module** (Decision), about 50 lines of standard library code (RFC 6238), instead of adding a dependency.
+- **Rate limiting is stored in Postgres**: it works across multiple API instances without adding Redis. Auth endpoints are low-volume, so the database load is small.
+- **TOTP is implemented in the module**, about 50 lines of standard library code (RFC 6238), instead of adding a dependency.
 - **Breached-password checks** call the Have I Been Pwned range API. If it's unreachable, the check is skipped and logged, rather than blocking sign-up.
 - **Client IP:** rate limits and the event log need the real user's IP, but requests arrive via Next.js. Next.js forwards it in `X-Forwarded-For`, and the module only trusts that header from configured private-network sources (`Config.TrustedProxies`).
 - **Time is injectable** (`Config.Now`) so tests can control expiry without sleeping.
@@ -255,10 +255,14 @@ Each step is one or more small PRs:
 9. The Next.js template
 10. `v1.0.0`
 
-## 13. Open questions
+## 13. Decisions
 
-1. **Postgres schema `auth`** for module tables, vs. an `auth_` table name prefix in `public`.
-2. **Should the module own `organizations`?** Proposed: yes, a minimal table (id, name), with projects storing extra organization data in their own tables. The alternative is that projects own organizations entirely and the module only stores memberships, which is more flexible but every project has to wire it up.
-3. **Organization chosen by `X-Organization-ID` header** vs. in the URL path (`/v1/organizations/{id}/invoices`).
-4. **Rate limiting in Postgres** vs. in memory (simpler, but per-instance only).
-5. **TOTP written in-house** vs. the `pquerna/otp` library.
+Decided on 2026-10-28:
+
+| # | Question | Decision | Why |
+|---|---|---|---|
+| 1 | Where module tables live | **A separate Postgres schema, `auth`** | No collisions with project tables, and it's obvious which tables the module owns |
+| 2 | Who owns organizations | **The module owns a minimal `auth.organizations` table** (id, name). Projects store extra organization data in their own tables | Team management is security-adjacent, so it belongs in the shared, tested code instead of being rebuilt per project |
+| 3 | How a request names its organization | **The `X-Organization-ID` header** | Short URLs, one place that checks membership, and it fits the API standard's one-level nesting limit |
+| 4 | Where rate limits are stored | **Postgres** | Works across multiple API instances without adding Redis |
+| 5 | TOTP | **Implemented in-house** (RFC 6238), tested against the RFC's official test vectors | One less dependency in security-critical code |
