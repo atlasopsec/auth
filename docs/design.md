@@ -97,7 +97,7 @@ func listInvoices(w http.ResponseWriter, r *http.Request) {
 | `internal/oauth` | No | Google, GitHub, Apple flows with PKCE and `state` |
 | `internal/ratelimit` | No | Postgres-backed rate limiting |
 | `internal/db` | No | sqlc-generated queries |
-| `migrations` | Yes (embedded) | goose SQL migrations, exposed through `auth.Migrate` |
+| `internal/migrations` | No | goose SQL migrations, embedded and applied by `auth.Migrate` |
 
 Keeping almost everything in `internal/` means projects **can't** reach into the security-critical parts directly. The public API stays small, which also makes it easier to keep backward compatible.
 
