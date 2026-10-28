@@ -2,7 +2,7 @@
 
 The module's public Go API and the HTTP endpoints it serves.
 
-> **Status: approved.** §1–5 cover build step 3 (built). §6 covers build step 4 (email), approved and being built. Sections marked **(Decision)** were confirmed in review. Later steps (RBAC, 2FA, OAuth) add to this but don't change what's here.
+> **Status: approved.** §1–6 cover build steps 3 and 4 (built). §7 covers build step 5 (roles, permissions, and organizations), approved and being built. Sections marked **(Decision)** were confirmed in review. Later steps (2FA, OAuth) add to this but don't change what's here.
 
 Once a name below is released, changing or removing it is a breaking change (a new major version), so this is the moment to get it right.
 
@@ -80,9 +80,10 @@ func (a *Auth) Authenticated(h http.Handler) http.Handler
 // Public marks h as intentionally open to logged-out users.
 func (a *Auth) Public(h http.Handler) http.Handler
 
-// Added in the RBAC step, without changing the two above:
+// Added in the RBAC step (§7), without changing the two above:
 //   func (a *Auth) Require(permission string, h http.Handler) http.Handler
-//   func (a *Auth) CheckRoutes(...) error  // fails if a route is neither
+//   func (a *Auth) RequireOrg(permission string, h http.Handler) http.Handler
+//   func (a *Auth) Protect(mux *http.ServeMux) http.Handler  // deny by default
 ```
 
 `Authenticated` is for apps or routes where "logged in" is enough, which is permanent for simple consumer apps. `Require(permission, h)` comes with RBAC and also checks a permission. Adding it later only adds a name, so nothing here breaks.
@@ -251,7 +252,7 @@ Most recently used first. `next_cursor` is always `null`: a user has a handful o
 | Feature | Step |
 |---|---|
 | Email verification, verify first as the default, `AllowUnverifiedLogin`, password reset and change, the `Mailer` | 4 |
-| Roles, organizations, `Require`, `CheckRoutes` | 5 |
+| Roles, organizations, `Require`, `RequireOrg`, `Protect` (see §7) | 5 |
 | 2FA (the second login response shape) | 6 |
 | OAuth | 7 |
 | **Rate limiting** and the security event log | 8 |
@@ -522,3 +523,172 @@ Confirmed in review on 2026-10-28:
 6. **Email change is part of step 4**, and ends all sessions when it completes.
 7. **The breach check is on by default, fails open, and is a field-level `breached` detail.**
 8. **A 60-second per-account cooldown** on sending each kind of email, until step 8.
+
+---
+
+## 7. Step 5: roles, permissions, and organizations
+
+Step 5 adds the permission checks from the [auth standard](https://github.com/jakefrenzel/engineering-standards/blob/main/standards/auth.md) §7: permissions named `resource:action`, roles defined in Go, checks on permissions (never role names), deny by default, and `404` for anything a user isn't allowed to see. It also adds organizations, members, and invitations.
+
+### Two kinds of roles (Decision)
+
+Your projects need two different things, so there are two role sets, and a project uses either or both:
+
+| | Organization roles | App roles |
+|---|---|---|
+| **For** | B2B apps and client portals: "Ada is an admin **of Acme**" | Consumer apps and your own staff: "Ada is a support agent **for the whole app**" |
+| **Stored in** | `auth.memberships` (one role per user per organization) | `auth.user_roles` (one role per user) |
+| **Checked by** | `a.RequireOrg("invoices:create", h)` | `a.Require("users:ban", h)` |
+| **Configured in** | `Config.OrgRoles` | `Config.AppRoles` |
+
+The alternative, organizations only, would make every consumer app create a fake one-person organization per user just to have an admin role.
+
+```go
+var orgRoles = rbac.Roles{
+	"owner":  {rbac.All},
+	"admin":  {"invoices:read", "invoices:create", "members:read", "members:manage", "organization:update"},
+	"member": {"invoices:read", "invoices:create", "members:read"},
+	"viewer": {"invoices:read"},
+}
+
+var appRoles = rbac.Roles{
+	"support": {"users:read", "users:ban"},
+}
+```
+
+- **Validation:** `New` checks every permission has the form `resource:action` (lowercase letters, digits, `_`), so a typo like `invoice:create` vs `invoices:create` is caught in a test, not silently denied in production. `Require` and `RequireOrg` panic at startup if given a permission that no role has, for the same reason.
+- **Removed roles:** roles live in code, and a role stored in the database but no longer in code grants nothing (and is logged), so deleting a role from code can't leave anyone with stale access.
+- **Default app role:** users have no app role, and so no app permissions, until one is set with `a.SetAppRole(ctx, userID, "support")`. That's a Go call for seed scripts and admin tooling, not an endpoint.
+
+### Checking permissions
+
+```go
+mux.Handle("GET /v1/invoices",  a.RequireOrg("invoices:read", listInvoices))
+mux.Handle("POST /v1/invoices", a.RequireOrg("invoices:create", createInvoice))
+mux.Handle("POST /v1/users/{id}/ban", a.Require("users:ban", banUser))
+```
+
+- **`RequireOrg`** reads the organization from the **`X-Organization-ID`** header (design.md decision 3), checks the user is a member, and checks their role has the permission.
+  - Not a member, or no such organization: `404 not_found`, so outsiders can't tell whether an organization exists.
+  - A member without the permission: `403 forbidden`.
+  - A missing or malformed header: `400 bad_request`.
+- **`Require`** does the same against the user's app role: `403 forbidden` without the permission.
+- **Inside a handler:**
+
+  ```go
+  org, _ := auth.OrgFrom(ctx)            // org.ID, org.Role
+  db.ListInvoices(ctx, org.ID)           // every query on org data filters by organization_id
+  if auth.Can(ctx, "invoices:delete") {  // finer checks, e.g. show a delete button
+  ```
+
+  `Can` checks the organization role under `RequireOrg`, and the app role under `Require`.
+- Removing someone or changing their role takes effect on their **next request**: permissions are looked up per request, not stored in the session.
+
+### Deny by default: `Protect` (Decision)
+
+The standard says a route without a declared permission is a bug that tests must catch. Go's `ServeMux` can't list its routes, so instead of a `CheckRoutes` test helper, the module checks every request:
+
+```go
+mux := http.NewServeMux()
+a.Register(mux)
+mux.Handle(...)
+http.ListenAndServe(addr, a.Protect(mux))
+```
+
+`Protect` looks up which route a request matches. If that route's handler wasn't wrapped by `Public`, `Authenticated`, `Require`, or `RequireOrg`, the request gets a `500` and an error is logged, and **the handler never runs**.
+
+- A forgotten permission **fails closed**: the route is unusable instead of open to everyone. The first test or manual check that touches it shows the error.
+- **One rule for projects:** the auth wrapper must be the outermost wrapper on each route (`a.RequireOrg("x:y", logging(h))`, not `logging(a.RequireOrg(...))`). Middleware for every route goes around the whole mux instead (`logging(a.Protect(mux))`).
+- `Authenticated` stays for routes where "logged in" is enough.
+
+### Organizations
+
+- **Who can create one (Decision):** any user with a verified email, through `POST /v1/organizations`. They become its `owner`.
+  - Apps that create organizations themselves (for example, when a client signs a contract) set `Config.DisableOrganizationCreation` and call `a.CreateOrganization(ctx, name, ownerID)` from Go.
+- **Owners (Decision):** `OrgRoles` must define `owner`. Owners always have every permission, whatever the definition says, so an organization can never be locked out of its own settings.
+  - **Every organization keeps at least one owner:** the last owner can't leave, be removed, or be changed to another role (`409 last_owner`).
+- **No privilege escalation (Decision):** you can give someone a role only if you already have every permission in it, and only owners can make someone an owner. Otherwise an admin with `members:manage` could promote themselves or a friend to owner.
+- **Deleting organizations is left out of step 5 (Decision).** It deletes everything the organization owns. Projects decide how that should work (grace periods, data export, support involvement) and can add it later. The module's tables cascade, so it's a single `DELETE` when needed.
+
+### Invitations (Decision)
+
+Members are added by email invitation:
+
+1. Someone with `members:manage` invites an address with a role (subject to the no-escalation rule). The invitation works for **7 days**.
+2. The address gets an email with `{AppURL}/accept-invitation#token=…`.
+3. The link is accepted by a **logged-in user whose verified email matches the invitation**. Someone without an account signs up first (with the same address), then accepts.
+
+**Why the email must match:** invitation links get forwarded, and a forwarded link shouldn't let the wrong person into a client's organization. Verifying the email first is what proves the person controls the invited address.
+
+- Inviting someone who's already a member: `409 already_member`.
+- Invitations can be listed and cancelled. Inviting the same address again replaces the earlier invitation.
+- The same 60-second cooldown applies per organization and address, until step 8's rate limiting.
+
+### Endpoints
+
+| Endpoint | Purpose | Requires |
+|---|---|---|
+| `POST /v1/organizations` | Create an organization; you become owner | Verified email |
+| `GET /v1/organizations` | My organizations, with my role in each | Session |
+| `GET /v1/organizations/{id}` | One organization | Member |
+| `PATCH /v1/organizations/{id}` | Rename it | `organization:update` |
+| `GET /v1/organizations/{id}/members` | Members and their roles | `members:read` |
+| `PATCH /v1/organizations/{id}/members/{user_id}` | Change a member's role | `members:manage` |
+| `DELETE /v1/organizations/{id}/members/{user_id}` | Remove a member, or leave (your own ID) | `members:manage`, or yourself |
+| `POST /v1/organizations/{id}/invitations` | Invite by email | `members:manage` |
+| `GET /v1/organizations/{id}/invitations` | Pending invitations | `members:manage` |
+| `DELETE /v1/organizations/{id}/invitations/{invitation_id}` | Cancel one | `members:manage` |
+| `POST /v1/invitations/accept` | Accept, with the token in the body | Session, matching verified email |
+
+- Permission names the module uses itself: `organization:update`, `members:read`, `members:manage`. Projects give them to roles like any other permission.
+- For anyone who isn't a member, every `/v1/organizations/{id}/...` endpoint returns `404`.
+- Lists use the standard shape. Members and invitations are paginated (cursor, default 20, max 100), since a client organization can be large.
+
+### Database
+
+Migration `00003` (new tables only):
+
+```
+auth.organizations   id, name, created_at, updated_at
+auth.memberships     id, organization_id, user_id, role, created_at, updated_at
+                     unique (organization_id, user_id)
+auth.invitations     id, organization_id, email, role, token_hash, invited_by,
+                     expires_at, accepted_at, created_at, updated_at
+auth.user_roles      user_id (primary key), role, created_at, updated_at
+```
+
+Deleting a user deletes their memberships, app role, and the invitations they sent. Projects' own tables reference `auth.organizations(id)` for their organization-scoped data.
+
+### Later steps
+
+- **2FA for roles** (step 6): `rbac.Roles{...}.RequireTwoFactor("owner", "admin")`. Those users must set up 2FA and get 12-hour sessions. Nothing in step 5 blocks this.
+- **Rate limiting** (step 8) on invitations.
+
+### New error codes
+
+| Code | Status | When |
+|---|---|---|
+| `forbidden` | 403 | Missing permission |
+| `last_owner` | 409 | Removing or demoting the only owner |
+| `already_member` | 409 | Inviting an existing member |
+| `invitation_email_mismatch` | 403 | Accepting an invitation sent to a different address |
+
+`token_invalid_or_expired` (422) is reused for bad invitation links.
+
+### PRs
+
+1. `rbac`, the schema, `Require`, `RequireOrg`, `Can`, `OrgFrom`, `SetAppRole`, `Protect`.
+2. Organizations and members endpoints, `CreateOrganization`.
+3. Invitations.
+
+### Decisions
+
+Confirmed in review on 2026-10-28:
+
+1. **Two role sets:** organization roles (`RequireOrg`) and app roles (`Require`), each optional.
+2. **`Protect(mux)`** enforces deny by default on every request, instead of a `CheckRoutes` test helper.
+3. **Any verified user can create an organization** and becomes its owner; `DisableOrganizationCreation` turns this off.
+4. **`owner` always has every permission**, and every organization keeps at least one.
+5. **No privilege escalation:** you can only grant roles whose permissions you already have; only owners grant owner.
+6. **Invitations require a logged-in user with a matching verified email**, and expire after 7 days.
+7. **Deleting organizations isn't in step 5.**

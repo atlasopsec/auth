@@ -16,7 +16,7 @@ How the auth module is structured, and how a project's Go API uses it. The **wha
  └──────────────┘          │  │ /v1/invoices │──uses─▶│ a.Require(perm)  │ │
  ┌──────────────┐  Bearer  │  └──────────────┘        │ auth.UserFrom()  │ │
  │ Mobile app   ├─────────▶│  ┌──────────────┐        │                  │ │
- └──────────────┘  token   │  │ /v1/users    │◀─mount─│ a.Handler()      │ │
+ └──────────────┘  token   │  │ /v1/users    │◀─mount─│ a.Register(mux)  │ │
                            │  │ /v1/sessions │        │ (signup, login,  │ │
                            │  │ ...          │        │  2FA, OAuth...)  │ │
                            │  └──────────────┘        └────────┬─────────┘ │
@@ -49,38 +49,38 @@ func main() {
     if err := auth.Migrate(ctx, pool); err != nil { ... }
 
     a, err := auth.New(auth.Config{
-        DB:            pool,                                     // *pgxpool.Pool
-        AppURL:        "https://example.com",                    // for links in emails
-        EncryptionKey: os.Getenv("AUTH_ENCRYPTION_KEY"),          // encrypts TOTP secrets
-        Mailer:        resend.New(os.Getenv("RESEND_API_KEY"), "Example <no-reply@mail.example.com>"),
-        Roles:         roles,                                    // see §6
-        OAuth: auth.OAuthConfig{
-            Google: &auth.OAuthClient{ClientID: "...", ClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET")},
-        },
+        DB:       pool,                                       // *pgxpool.Pool
+        Mailer:   resend.New(os.Getenv("RESEND_API_KEY"), "Example <no-reply@mail.example.com>"),
+        AppURL:   "https://app.example.com",                  // for links in emails
+        AppName:  "Example",
+        OrgRoles: orgRoles,                                   // see §6
+        AppRoles: appRoles,
         Hooks: auth.Hooks{
-            OnUserCreated: func(ctx context.Context, u auth.User) error { ... }, // e.g. create a profile row
+            OnUserCreated: func(ctx context.Context, tx pgx.Tx, u auth.User) error { ... }, // e.g. create a profile row
         },
-        Logger: slog.Default(),
+        // Added in later steps: EncryptionKey (2FA), OAuth.
     })
     if err != nil { ... }
+    defer a.Close(ctx)                                       // waits for emails still being sent
 
     mux := http.NewServeMux()
-    mux.Handle("/v1/", a.Handler())                                     // the module's auth endpoints (§5)
-    mux.Handle("GET /v1/invoices", a.Require("invoices:read", listInvoices))  // project routes
-    mux.Handle("POST /v1/invoices", a.Require("invoices:create", createInvoice))
+    a.Register(mux)                                          // the module's auth endpoints (§5)
+    mux.Handle("GET /v1/invoices", a.RequireOrg("invoices:read", listInvoices))  // project routes
+    mux.Handle("POST /v1/invoices", a.RequireOrg("invoices:create", createInvoice))
 
-    http.ListenAndServe(":"+os.Getenv("PORT"), mux)
+    http.ListenAndServe(":"+os.Getenv("PORT"), a.Protect(mux)) // deny by default (§6)
 }
 
 func listInvoices(w http.ResponseWriter, r *http.Request) {
-    user := auth.UserFrom(r.Context())   // always present behind a.Require
-    org := auth.OrganizationFrom(r.Context())
+    user, _ := auth.UserFrom(r.Context())   // always present behind RequireOrg
+    org, _ := auth.OrgFrom(r.Context())
     // ... query invoices WHERE organization_id = org.ID
 }
 ```
 
-- `a.Require(permission, handler)` loads the session, rejects missing or expired ones (`401`), checks the permission (`403`), and only then calls the handler. **A route without `a.Require` or an explicit `a.Public(handler)` fails the module's route check at startup** (see §6, deny by default).
-- `auth.UserFrom(ctx)` gives handlers the current user. It's never `nil` behind `Require`.
+- `a.RequireOrg(permission, handler)` loads the session, rejects missing or expired ones (`401`), checks the user is a member of the organization in `X-Organization-ID` (`404` if not), checks the permission (`403`), and only then calls the handler. `a.Require` does the same with the user's app role. See api.md §7.
+- **Deny by default:** `a.Protect(mux)` refuses any request whose route isn't wrapped by `Public`, `Authenticated`, `Require`, or `RequireOrg`.
+- `auth.UserFrom(ctx)` gives handlers the current user. Its `ok` result is always true behind those wrappers.
 
 ## 3. Package layout
 
@@ -147,7 +147,7 @@ auth.rate_limits        key, window_start, count
 
 ## 5. HTTP endpoints
 
-`a.Handler()` serves these, following the [API design standard](https://github.com/jakefrenzel/engineering-standards/blob/main/standards/api-design.md) (resource URLs, error format, `/v1`). Logging in is "creating a session"; signing up is "creating a user".
+`a.Register(mux)` adds these, following the [API design standard](https://github.com/jakefrenzel/engineering-standards/blob/main/standards/api-design.md) (resource URLs, error format, `/v1`). Logging in is "creating a session"; signing up is "creating a user".
 
 | Endpoint | What it does | Auth |
 |---|---|---|
@@ -181,20 +181,25 @@ All errors use the standard format. The module's stable codes include: `invalid_
 
 ## 6. Roles and permissions
 
-Projects define their roles in Go and pass them in `Config.Roles`:
+Projects define their roles in Go. There are two optional sets: **organization roles** (a user's role in each organization) and **app roles** (one role per user, across the whole app). See api.md §7.
 
 ```go
-var roles = rbac.Roles{
+var orgRoles = rbac.Roles{
     "owner":  {rbac.All},                                                    // every permission
-    "admin":  {"invoices:read", "invoices:create", "members:manage"},
-    "member": {"invoices:read", "invoices:create"},
+    "admin":  {"invoices:read", "invoices:create", "members:read", "members:manage", "organization:update"},
+    "member": {"invoices:read", "invoices:create", "members:read"},
     "viewer": {"invoices:read"},
-}.RequireTwoFactor("owner", "admin")   // privileged roles must use 2FA, with 12-hour sessions
+}.RequireTwoFactor("owner", "admin")   // step 6: privileged roles must use 2FA, with 12-hour sessions
+
+var appRoles = rbac.Roles{
+    "support": {"users:read", "users:ban"},
+}
 ```
 
-- Permissions are checked against the user's role **in the current organization**. The organization comes from the `X-Organization-ID` request header, and the module verifies the user is actually a member.
-- **Deny by default:** `a.Handler()` and `a.Require`/`a.Public` record every route. `a.CheckRoutes(mux)` fails if a route is registered without one, and projects call it in a test so a forgotten permission breaks CI rather than production.
-- Users without organizations (simple consumer apps) are supported; such projects just don't use organization-scoped permissions.
+- `RequireOrg` checks the user's role **in the current organization**. The organization comes from the `X-Organization-ID` request header, and the module verifies the user is actually a member.
+- `Require` checks the user's app role.
+- **Deny by default:** `a.Protect(mux)` wraps the project's whole router and refuses (`500`, logged) any request whose route wasn't wrapped by `Public`, `Authenticated`, `Require`, or `RequireOrg`, so a forgotten permission fails closed. Go's `ServeMux` can't list its routes, which rules out a `CheckRoutes` test helper. See api.md §7.
+- Projects without organizations (simple consumer apps) use only app roles.
 
 ## 7. Email
 
@@ -244,7 +249,7 @@ A small template in this repo (`templates/nextjs/`), copied into projects, provi
 
 - Pure logic (password hashing, tokens, TOTP) has table-driven unit tests, including known test vectors (e.g. RFC 6238 for TOTP).
 - Everything touching the database is tested against a real Postgres via `testcontainers-go`.
-- Endpoints are tested through `httptest` against the full `a.Handler()`, covering every failure case in the auth standard: wrong password, unknown email, expired sessions, reused tokens, denied permissions, cross-organization access.
+- Endpoints are tested through `httptest` against a mux with `a.Register`, covering every failure case in the auth standard: wrong password, unknown email, expired sessions, reused tokens, denied permissions, cross-organization access.
 
 ## 12. Build order
 
@@ -254,7 +259,7 @@ Each step is one or more small PRs:
 2. Migrations, `internal/db`, `internal/session`
 3. `auth.New`, `Require`, `UserFrom`, plus sign up, log in, log out, sessions endpoints, and the error format
 4. Email verification, password reset, password change, email change, `auth/mail`, `auth/mail/resend`
-5. RBAC: `auth/rbac`, organizations, memberships, `CheckRoutes`
+5. RBAC: `auth/rbac`, organizations, memberships, invitations, `Protect`
 6. 2FA (TOTP, recovery codes, challenges)
 7. OAuth (Google, GitHub, Apple)
 8. Rate limiting, the event log, security notice emails
