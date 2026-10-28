@@ -1,0 +1,19 @@
+# golangci-lint v2 config. Copy to the Go module root as .golangci.yml.
+# See: standards/code-style.md in jakefrenzel/engineering-standards
+version: "2"
+
+linters:
+  # errcheck, govet, ineffassign, staticcheck, unused
+  default: standard
+  enable:
+    - bodyclose   # HTTP response bodies are closed
+    - errorlint   # errors are compared with errors.Is / errors.As, and wrapped with %w
+    - gosec       # common security mistakes
+    - misspell    # typos in comments and strings
+    - noctx       # HTTP requests carry a context
+    - unconvert   # unnecessary type conversions
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

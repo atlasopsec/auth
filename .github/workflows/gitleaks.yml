@@ -1,0 +1,29 @@
+# Scans the full git history for committed secrets.
+# Copy to .github/workflows/gitleaks.yml in each project.
+# See: standards/git-workflow.md in jakefrenzel/engineering-standards
+#
+# Runs the gitleaks Docker image directly instead of gitleaks-action,
+# because gitleaks-action requires a license key for organization repos.
+
+name: gitleaks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history, so old commits are scanned too
+
+      - name: Scan for secrets
+        run: |
+          docker run --rm -v "$PWD:/repo" ghcr.io/gitleaks/gitleaks:v8.21.2 \
+            git /repo --redact --verbose
