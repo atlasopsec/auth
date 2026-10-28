@@ -2,7 +2,7 @@
 
 The module's public Go API and the HTTP endpoints it serves.
 
-> **Status:** §1–6 (build steps 3 and 4) are approved and built. §7 (build step 5: roles, permissions, and organizations) is a **sketch for review**; its **(Decision)** items need sign-off before code is written. Sections marked **(Decision)** in §1–6 were confirmed in review.
+> **Status: approved.** §1–6 cover build steps 3 and 4 (built). §7 covers build step 5 (roles, permissions, and organizations), approved and being built. Sections marked **(Decision)** were confirmed in review. Later steps (2FA, OAuth) add to this but don't change what's here.
 
 Once a name below is released, changing or removing it is a breaking change (a new major version), so this is the moment to get it right.
 
@@ -80,9 +80,10 @@ func (a *Auth) Authenticated(h http.Handler) http.Handler
 // Public marks h as intentionally open to logged-out users.
 func (a *Auth) Public(h http.Handler) http.Handler
 
-// Added in the RBAC step, without changing the two above:
+// Added in the RBAC step (§7), without changing the two above:
 //   func (a *Auth) Require(permission string, h http.Handler) http.Handler
-//   func (a *Auth) CheckRoutes(...) error  // fails if a route is neither
+//   func (a *Auth) RequireOrg(permission string, h http.Handler) http.Handler
+//   func (a *Auth) Protect(mux *http.ServeMux) http.Handler  // deny by default
 ```
 
 `Authenticated` is for apps or routes where "logged in" is enough, which is permanent for simple consumer apps. `Require(permission, h)` comes with RBAC and also checks a permission. Adding it later only adds a name, so nothing here breaks.
@@ -251,7 +252,7 @@ Most recently used first. `next_cursor` is always `null`: a user has a handful o
 | Feature | Step |
 |---|---|
 | Email verification, verify first as the default, `AllowUnverifiedLogin`, password reset and change, the `Mailer` | 4 |
-| Roles, organizations, `Require`, `CheckRoutes` | 5 |
+| Roles, organizations, `Require`, `RequireOrg`, `Protect` (see §7) | 5 |
 | 2FA (the second login response shape) | 6 |
 | OAuth | 7 |
 | **Rate limiting** and the security event log | 8 |
@@ -525,7 +526,7 @@ Confirmed in review on 2026-10-28:
 
 ---
 
-## 7. Step 5: roles, permissions, and organizations (sketch for review)
+## 7. Step 5: roles, permissions, and organizations
 
 Step 5 adds the permission checks from the [auth standard](https://github.com/jakefrenzel/engineering-standards/blob/main/standards/auth.md) §7: permissions named `resource:action`, roles defined in Go, checks on permissions (never role names), deny by default, and `404` for anything a user isn't allowed to see. It also adds organizations, members, and invitations.
 
@@ -680,7 +681,9 @@ Deleting a user deletes their memberships, app role, and the invitations they se
 2. Organizations and members endpoints, `CreateOrganization`.
 3. Invitations.
 
-### Decisions to confirm
+### Decisions
+
+Confirmed in review on 2026-10-28:
 
 1. **Two role sets:** organization roles (`RequireOrg`) and app roles (`Require`), each optional.
 2. **`Protect(mux)`** enforces deny by default on every request, instead of a `CheckRoutes` test helper.
