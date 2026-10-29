@@ -2,7 +2,7 @@
 
 The module's public Go API and the HTTP endpoints it serves.
 
-> **Status:** §1–8 cover build steps 3–6 (approved and built). §9 covers build step 7 (OAuth) and is a draft for review. Sections marked **(Decision)** in §1–8 were confirmed in review. Later steps add to this but don't change what's here.
+> **Status:** §1–8 cover build steps 3–6 (approved and built). §9 covers build step 7 (OAuth), approved and being built. Sections marked **(Decision)** were confirmed in review. Later steps add to this but don't change what's here.
 
 Once a name below is released, changing or removing it is a breaking change (a new major version), so this is the moment to get it right.
 
@@ -880,8 +880,6 @@ Confirmed in review on 2026-10-28:
 
 ## 9. Step 7: sign in with Google, GitHub, and Apple
 
-> **Status: draft for review.** Sections marked **(Decision)** need confirming.
-
 Step 7 adds OAuth from the [auth standard](https://github.com/jakefrenzel/engineering-standards/blob/main/standards/auth.md) §5 and the [mobile standard](https://github.com/jakefrenzel/engineering-standards/blob/main/standards/mobile.md) §5:
 - **PKCE and `state` always.**
 - **Users are matched by the provider's user ID, never by email.**
@@ -1044,7 +1042,9 @@ auth.oauth_flows      id, state_hash, provider, purpose (login|link), user_id (l
 2. Linking, unlinking, the account list, notices, and `password_not_set`.
 3. Apple: the redirect flow, the client-secret JWT, and native iOS sign-in.
 
-### Decisions to confirm
+### Decisions
+
+Confirmed in review on 2026-10-29:
 
 1. **One redirect flow for web and mobile, run by the Go API,** with the callback on web app pages and a mobile page that hands off to the app's deep link.
 2. **A client verifier on top of `state` and PKCE,** so only the device that started a flow can finish it.
