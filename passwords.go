@@ -237,7 +237,22 @@ func (a *Auth) requirePassword(w http.ResponseWriter, r *http.Request, userID uu
 // passwordChecked verifies the current password, writing the error
 // response and returning false if it's wrong.
 func (a *Auth) passwordChecked(w http.ResponseWriter, r *http.Request, userID uuid.UUID, pw string) bool {
+	reached, retry, err := a.limiter.Reached(r.Context(), limitWrongPassword, userID.String())
+	if err != nil {
+		httpapi.WriteInternalError(w, r, a.log, err)
+		return false
+	}
+	if reached {
+		writeRateLimited(w, r, retry)
+		return false
+	}
 	ok, err := a.checkPassword(r.Context(), userID, pw)
+	if err == nil && !ok {
+		if _, _, err = a.limiter.Hit(r.Context(), limitWrongPassword, userID.String()); err != nil {
+			httpapi.WriteInternalError(w, r, a.log, err)
+			return false
+		}
+	}
 	switch {
 	case errors.Is(err, errPasswordNotSet):
 		writePasswordNotSet(w, r)

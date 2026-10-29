@@ -24,6 +24,10 @@ var (
 	// limitWrongCodes counts wrong 2FA codes, on top of the per-user
 	// guessing limit (§8).
 	limitWrongCodes = ratelimit.Rule{Name: "wrong-2fa:ip", Limit: 30, Window: time.Hour}
+	// limitWrongPassword counts wrong current passwords on logged-in
+	// endpoints, per user, so a stolen session can't be used to guess the
+	// password.
+	limitWrongPassword = ratelimit.Rule{Name: "wrong-password:user", Limit: 10, Window: time.Hour}
 )
 
 // limitIP wraps h so each client IP gets at most rule's requests.

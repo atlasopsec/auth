@@ -262,14 +262,27 @@ func (a *Auth) logIn(w http.ResponseWriter, r *http.Request) {
 		writeValidationFailed(w, r, details)
 		return
 	}
+	// After repeated failures, an attempt that comes too early is refused
+	// without checking the password, so waiting can't be skipped by
+	// guessing faster.
+	from := a.clientIP(r)
+	wait, err := a.loginWait(r.Context(), req.Email, from)
+	if err != nil {
+		httpapi.WriteInternalError(w, r, a.log, err)
+		return
+	}
+	if wait > 0 {
+		writeRateLimited(w, r, wait)
+		return
+	}
 
 	row, err := a.q.GetUserByEmail(r.Context(), req.Email)
 	if errors.Is(err, pgx.ErrNoRows) || err == nil && row.PasswordHash == nil {
 		// Unknown email, or an account that only signs in with OAuth. Do a
 		// password check's worth of work so the response takes as long as
-		// a wrong password would.
+		// a wrong password would, and count it the same.
 		password.SimulateVerify(req.Password)
-		writeInvalidCredentials(w, r)
+		a.wrongPassword(w, r, req.Email, from)
 		return
 	}
 	if err != nil {
@@ -282,7 +295,11 @@ func (a *Auth) logIn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !ok {
-		writeInvalidCredentials(w, r)
+		a.wrongPassword(w, r, req.Email, from)
+		return
+	}
+	if err := a.clearLoginFailures(r.Context(), req.Email, from); err != nil {
+		httpapi.WriteInternalError(w, r, a.log, err)
 		return
 	}
 	a.rehashIfNeeded(r, row, req.Password)
@@ -311,6 +328,15 @@ func (a *Auth) logIn(w http.ResponseWriter, r *http.Request) {
 	}
 	a.logEvent(r, "auth: user logged in", row.ID)
 	httpapi.WriteJSON(w, r, http.StatusCreated, loginResponse{User: toUserJSON(userFromRow(row)), Token: tok, ExpiresAt: timestamp(s.ExpiresAt)})
+}
+
+// wrongPassword counts a failed login and answers it.
+func (a *Auth) wrongPassword(w http.ResponseWriter, r *http.Request, email, ip string) {
+	if err := a.recordLoginFailure(r.Context(), email, ip); err != nil {
+		httpapi.WriteInternalError(w, r, a.log, err)
+		return
+	}
+	writeInvalidCredentials(w, r)
 }
 
 // rehashIfNeeded upgrades a password hash made with older cost settings,

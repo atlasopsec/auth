@@ -1113,6 +1113,9 @@ The standard: "slow down further attempts (growing delays) instead of locking th
 - **A correct password clears** that IP's count for the account.
 - **Unknown emails are counted exactly like real ones,** so the delays don't reveal whether an account exists.
 - **The real owner on another network** is only slowed by the per-account delays, which need many failures from everywhere. An attacker hammering the account from one IP only slows themselves.
+- **Counts start over after an hour without failures** for that key. The exact schedule: no wait after the first 5 failures (20 per account); after the next failure 1 second, then 2, 4, and so on, capped at 15 minutes.
+- **Stored in `auth.login_failures`** (migration `00009`), one row per key with its count and the time the next attempt is allowed. Emails appear only as hashes. The cleanup job deletes rows an hour after their last failure, once their wait is over.
+- **Concurrent attempts** that arrive in the same instant can each be checked before either failure is counted. The per-IP login limit (30 per 10 minutes) bounds that.
 
 ### The event log (Decision)
 

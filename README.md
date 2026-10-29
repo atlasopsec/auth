@@ -63,7 +63,7 @@ There's no endpoint for it, on purpose.
 
 ## Rate limits and cleanup
 
-The module rate-limits logins, sign-ups, emails, and sign-in starts per client IP, and emails per address, in Postgres, so every API instance shares the counts. Limited requests get `429 rate_limited` with `Retry-After`. The limits are in [docs/api.md §10](docs/api.md).
+The module rate-limits logins, sign-ups, emails, and sign-in starts per client IP, and emails per address, in Postgres, so every API instance shares the counts. Repeated wrong passwords slow down further attempts, growing to 15 minutes, but never lock an account. Limited requests get `429 rate_limited` with `Retry-After`. The limits are in [docs/api.md §10](docs/api.md).
 
 A background job deletes expired sessions, links, and other short-lived rows every hour. To run it on your own schedule instead, set `Config.DisableCleanup` and call `a.Cleanup(ctx)`.
 

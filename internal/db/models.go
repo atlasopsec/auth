@@ -37,6 +37,16 @@ type AuthInvitation struct {
 	UpdatedAt      time.Time
 }
 
+type AuthLoginFailure struct {
+	ID            uuid.UUID
+	Key           string
+	Failures      int32
+	LastFailedAt  time.Time
+	NextAllowedAt time.Time
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+}
+
 type AuthMembership struct {
 	ID             uuid.UUID
 	OrganizationID uuid.UUID
