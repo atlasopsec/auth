@@ -23,13 +23,30 @@ The design follows the auth standard in [`jakefrenzel/engineering-standards`](ht
 
 ## Encryption key
 
-Every project needs an `AUTH_ENCRYPTION_KEY`: 32 random bytes, base64-encoded, passed as `Config.EncryptionKey`. It encrypts users' 2FA secrets.
+Every project needs an `AUTH_ENCRYPTION_KEY`: 32 random bytes, base64-encoded, passed as `Config.EncryptionKey`. It encrypts users' 2FA secrets, and the PKCE verifiers of sign-ins in progress.
 
 ```sh
 openssl rand -base64 32
 ```
 
 Keep it in Railway's variables with the other secrets, and **back it up**. If it's lost, every user who has 2FA on has to set it up again. Until then they can't log in; turn their 2FA off with `ResetTwoFactor`.
+
+## Sign in with Google and GitHub
+
+Turn on a provider with its client ID and secret, keeping the secret in a Railway variable:
+
+```go
+OAuth: auth.OAuth{
+	Google: &auth.Google{ClientID: "…", ClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET")},
+	GitHub: &auth.GitHub{ClientID: "…", ClientSecret: os.Getenv("GITHUB_CLIENT_SECRET")},
+},
+```
+
+At each provider, register these redirect URIs, both served by the web app:
+- `{AppURL}/oauth/callback`
+- `{AppURL}/oauth/callback/mobile`, which hands the result to the mobile app's deep link
+
+Use a Google OAuth client of type "Web application". For GitHub, register `{AppURL}/oauth/callback` as the callback URL; GitHub accepts paths under it.
 
 ## Users locked out of 2FA
 

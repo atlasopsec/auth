@@ -46,6 +46,32 @@ type AuthMembership struct {
 	UpdatedAt      time.Time
 }
 
+type AuthOauthAccount struct {
+	ID             uuid.UUID
+	UserID         uuid.UUID
+	Provider       string
+	ProviderUserID string
+	Email          string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
+type AuthOauthFlow struct {
+	ID                    uuid.UUID
+	StateHash             []byte
+	Provider              string
+	Purpose               string
+	UserID                *uuid.UUID
+	Client                string
+	ClientChallenge       []byte
+	PkceVerifierEncrypted []byte
+	Nonce                 string
+	ExpiresAt             time.Time
+	UsedAt                *time.Time
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
+}
+
 type AuthOrganization struct {
 	ID        uuid.UUID
 	Name      string
