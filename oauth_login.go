@@ -79,6 +79,9 @@ func newProviders(cfg OAuth, now func() time.Time) (map[string]oauth.Provider, e
 func (a *Auth) registerOAuth(mux *http.ServeMux) {
 	mux.Handle("POST /v1/oauth-flows", endpoint(http.HandlerFunc(a.startOAuthFlow)))
 	mux.Handle("POST /v1/oauth-flows/complete", endpoint(http.HandlerFunc(a.completeOAuthFlow)))
+	mux.Handle("GET /v1/users/me/oauth-accounts", endpoint(a.Authenticated(http.HandlerFunc(a.listOAuthAccounts))))
+	mux.Handle("POST /v1/users/me/oauth-accounts", endpoint(a.Authenticated(http.HandlerFunc(a.startLink))))
+	mux.Handle("DELETE /v1/users/me/oauth-accounts/{id}", endpoint(a.Authenticated(http.HandlerFunc(a.unlink))))
 }
 
 // redirectURI is the web app page the provider sends the user back to.
@@ -109,13 +112,24 @@ func (a *Auth) startOAuthFlow(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteDecodeError(w, r, err)
 		return
 	}
+	challenge, details := a.checkFlowStart(req)
+	if details != nil {
+		writeValidationFailed(w, r, details)
+		return
+	}
+	a.writeNewFlow(w, r, req, challenge, "login", nil)
+}
+
+// checkFlowStart validates a request to start a flow, returning the
+// decoded client challenge or the invalid fields.
+func (a *Auth) checkFlowStart(req startOAuthRequest) ([]byte, []httpapi.FieldError) {
 	var details []httpapi.FieldError
-	provider, ok := a.providers[req.Provider]
-	if !ok {
-		details = append(details, httpapi.FieldError{Field: "provider", Code: "invalid_value", Message: "This sign-in provider isn't available."})
+	if _, ok := a.providers[req.Provider]; !ok {
+		fe := httpapi.FieldError{Field: "provider", Code: "invalid_value", Message: "This sign-in provider isn't available."}
 		if req.Provider == "" {
-			details[0].Code = "required"
+			fe.Code = "required"
 		}
+		details = append(details, fe)
 	}
 	if fe, ok := checkClient(req.Client); !ok {
 		details = append(details, fe)
@@ -124,11 +138,12 @@ func (a *Auth) startOAuthFlow(w http.ResponseWriter, r *http.Request) {
 	if err != nil || len(challenge) != sha256.Size {
 		details = append(details, httpapi.FieldError{Field: "client_challenge", Code: "invalid_format", Message: "Send the base64url SHA-256 of the client verifier."})
 	}
-	if details != nil {
-		writeValidationFailed(w, r, details)
-		return
-	}
+	return challenge, details
+}
 
+// writeNewFlow creates a flow for purpose ("login", or "link" with the
+// user linking), and answers with the provider URL.
+func (a *Auth) writeNewFlow(w http.ResponseWriter, r *http.Request, req startOAuthRequest, challenge []byte, purpose string, userID *uuid.UUID) {
 	id, err := uuid.NewV7()
 	if err != nil {
 		httpapi.WriteInternalError(w, r, a.log, fmt.Errorf("generating OAuth flow ID: %w", err))
@@ -146,7 +161,8 @@ func (a *Auth) startOAuthFlow(w http.ResponseWriter, r *http.Request) {
 			ID:                    id,
 			StateHash:             token.Hash(state),
 			Provider:              req.Provider,
-			Purpose:               "login",
+			Purpose:               purpose,
+			UserID:                userID,
 			Client:                string(client),
 			ClientChallenge:       challenge,
 			PkceVerifierEncrypted: a.box.Seal([]byte(verifier), id[:]),
@@ -160,7 +176,7 @@ func (a *Auth) startOAuthFlow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpapi.WriteJSON(w, r, http.StatusCreated, oauthFlowJSON{
-		AuthorizationURL: provider.AuthCodeURL(state, verifier, nonce, a.redirectURI(client)),
+		AuthorizationURL: a.providers[req.Provider].AuthCodeURL(state, verifier, nonce, a.redirectURI(client)),
 		ExpiresAt:        timestamp(expires),
 	})
 }
@@ -199,7 +215,7 @@ func (a *Auth) completeOAuthFlow(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	flow, err := a.useOAuthFlow(ctx, req.State, req.ClientVerifier)
+	flow, err := a.useOAuthFlow(ctx, req.State, req.ClientVerifier, a.sessionUserID(r))
 	if err != nil {
 		a.writeOAuthError(w, r, err)
 		return
@@ -216,6 +232,10 @@ func (a *Auth) completeOAuthFlow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if flow.Purpose == "link" {
+		a.finishLink(w, r, flow, id)
+		return
+	}
 	res, err := a.oauthLogIn(r, flow.Provider, id, client)
 	if err != nil {
 		a.writeOAuthError(w, r, err)
@@ -240,9 +260,11 @@ func (a *Auth) completeOAuthFlow(w http.ResponseWriter, r *http.Request) {
 }
 
 // useOAuthFlow spends the flow named by state, if it's usable and
-// clientVerifier matches its challenge. It's spent before the provider is
-// called, so a flow can never be finished twice, even if the call fails.
-func (a *Auth) useOAuthFlow(ctx context.Context, state, clientVerifier string) (db.AuthOauthFlow, error) {
+// clientVerifier matches its challenge. A link flow also needs the session
+// of the user who started it: sessionUser. It's spent before the provider
+// is called, so a flow can never be finished twice, even if the call
+// fails.
+func (a *Auth) useOAuthFlow(ctx context.Context, state, clientVerifier string, sessionUser *uuid.UUID) (db.AuthOauthFlow, error) {
 	if !token.Valid(state) {
 		return db.AuthOauthFlow{}, fmt.Errorf("%w: malformed state", errOAuthFailed)
 	}
@@ -257,8 +279,11 @@ func (a *Auth) useOAuthFlow(ctx context.Context, state, clientVerifier string) (
 			return fmt.Errorf("reading OAuth flow: %w", err)
 		}
 		now := a.now().UTC().Truncate(time.Microsecond)
-		if flow.UsedAt != nil || !now.Before(flow.ExpiresAt) || flow.Purpose != "login" {
+		if flow.UsedAt != nil || !now.Before(flow.ExpiresAt) {
 			return fmt.Errorf("%w: flow used or expired", errOAuthFailed)
+		}
+		if flow.Purpose == "link" && (sessionUser == nil || flow.UserID == nil || *sessionUser != *flow.UserID) {
+			return fmt.Errorf("%w: link flow finished without the linking user's session", errOAuthFailed)
 		}
 		sum := sha256.Sum256([]byte(clientVerifier))
 		if subtle.ConstantTimeCompare(sum[:], flow.ClientChallenge) != 1 {

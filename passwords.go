@@ -214,6 +214,44 @@ func (a *Auth) resetPassword(ctx context.Context, userID, tokenID uuid.UUID, has
 	return res, nil
 }
 
+// requirePassword answers 409 password_not_set, and returns false, if the
+// user has no password. Endpoints that need the current password call it
+// first, so the app can offer to set one with a password reset instead of
+// asking for a password that doesn't exist.
+func (a *Auth) requirePassword(w http.ResponseWriter, r *http.Request, userID uuid.UUID) bool {
+	row, err := a.q.GetUserByID(r.Context(), userID)
+	if err != nil {
+		httpapi.WriteInternalError(w, r, a.log, fmt.Errorf("reading user: %w", err))
+		return false
+	}
+	if row.PasswordHash == nil {
+		writePasswordNotSet(w, r)
+		return false
+	}
+	return true
+}
+
+// passwordChecked verifies the current password, writing the error
+// response and returning false if it's wrong.
+func (a *Auth) passwordChecked(w http.ResponseWriter, r *http.Request, userID uuid.UUID, pw string) bool {
+	ok, err := a.checkPassword(r.Context(), userID, pw)
+	switch {
+	case errors.Is(err, errPasswordNotSet):
+		writePasswordNotSet(w, r)
+	case err != nil:
+		httpapi.WriteInternalError(w, r, a.log, err)
+	case !ok:
+		// Not 401: that would tell the app the user had been logged out.
+		writeValidationFailed(w, r, []httpapi.FieldError{currentPasswordIncorrect})
+	}
+	return err == nil && ok
+}
+
+func writePasswordNotSet(w http.ResponseWriter, r *http.Request) {
+	httpapi.WriteError(w, r, http.StatusConflict, "password_not_set",
+		"Your account doesn't have a password yet. Set one with a password reset first.", nil)
+}
+
 type changePasswordRequest struct {
 	CurrentPassword string `json:"current_password"`
 	NewPassword     string `json:"new_password"`
@@ -228,9 +266,13 @@ func (a *Auth) changePassword(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteDecodeError(w, r, err)
 		return
 	}
+	// OAuth-only accounts add a password with a reset instead.
+	if !a.requirePassword(w, r, c.user.ID) {
+		return
+	}
 	var details []httpapi.FieldError
 	if req.CurrentPassword == "" {
-		details = append(details, httpapi.FieldError{Field: "current_password", Code: "required", Message: "Enter your current password."})
+		details = append(details, currentPasswordRequired)
 	}
 	if fe, ok := checkNewPassword(req.NewPassword); !ok {
 		fe.Field = "new_password"
@@ -242,23 +284,7 @@ func (a *Auth) changePassword(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	row, err := a.q.GetUserByID(ctx, c.user.ID)
-	if err != nil {
-		httpapi.WriteInternalError(w, r, a.log, err)
-		return
-	}
-	ok := false
-	if row.PasswordHash == nil {
-		// OAuth-only accounts have no current password; they add one with
-		// a reset.
-		password.SimulateVerify(req.CurrentPassword)
-	} else if ok, err = password.Verify(req.CurrentPassword, *row.PasswordHash); err != nil {
-		httpapi.WriteInternalError(w, r, a.log, fmt.Errorf("verifying password for user %s: %w", row.ID, err))
-		return
-	}
-	if !ok {
-		// Not 401: that would tell the app the user had been logged out.
-		writeValidationFailed(w, r, []httpapi.FieldError{{Field: "current_password", Code: "incorrect", Message: "Your current password is incorrect."}})
+	if !a.passwordChecked(w, r, c.user.ID, req.CurrentPassword) {
 		return
 	}
 	if fe, ok := a.checkBreached(r, "new_password", req.NewPassword); !ok {
@@ -271,12 +297,12 @@ func (a *Auth) changePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := a.setPasswordKeepingSession(ctx, row.ID, c.session.ID, hash); err != nil {
+	if err := a.setPasswordKeepingSession(ctx, c.user.ID, c.session.ID, hash); err != nil {
 		httpapi.WriteInternalError(w, r, a.log, err)
 		return
 	}
-	a.logEvent(r, "auth: password changed", row.ID)
-	a.sendNotice(row.Email, a.emails.PasswordChanged)
+	a.logEvent(r, "auth: password changed", c.user.ID)
+	a.sendNotice(c.user.Email, a.emails.PasswordChanged)
 	w.WriteHeader(http.StatusNoContent)
 }
 

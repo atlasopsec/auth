@@ -47,6 +47,10 @@ type Emails struct {
 	// (or into their email, for a password reset) but then entered too
 	// many wrong 2FA codes. Link is empty.
 	TwoFactorGuessing func(EmailData) (subject, text, html string)
+	// OAuthLinked and OAuthUnlinked tell a user a sign-in provider was
+	// added to or removed from their account. Provider is set.
+	OAuthLinked   func(EmailData) (subject, text, html string)
+	OAuthUnlinked func(EmailData) (subject, text, html string)
 }
 
 // EmailData is what an email template can use.
@@ -65,6 +69,9 @@ type EmailData struct {
 	// RecoveryCodesLeft is how many unused recovery codes the user has,
 	// for RecoveryCodeUsed.
 	RecoveryCodesLeft int
+	// Provider is the sign-in provider's name, such as "Google", for
+	// OAuthLinked and OAuthUnlinked.
+	Provider string
 }
 
 func defaultVerifyEmail(d EmailData) (string, string, string) {
@@ -190,6 +197,24 @@ func defaultTwoFactorGuessing(d EmailData) (string, string, string) {
 
 To get that far, they needed your password or access to this email account. If it wasn't you, change your password now at %s/reset-password, and change your email password too.
 `, d.AppName, d.AppURL),
+		""
+}
+
+func defaultOAuthLinked(d EmailData) (string, string, string) {
+	return d.Provider + " sign-in was added to your " + d.AppName + " account",
+		fmt.Sprintf(`You can now log in to your %s account with %s.
+
+If you didn't do this, someone else may be able to log in as you: reset your password now at %s/reset-password, and remove %s from your account settings.
+`, d.AppName, d.Provider, d.AppURL, d.Provider),
+		""
+}
+
+func defaultOAuthUnlinked(d EmailData) (string, string, string) {
+	return d.Provider + " sign-in was removed from your " + d.AppName + " account",
+		fmt.Sprintf(`You can no longer log in to your %s account with %s.
+
+If you didn't do this, reset your password now at %s/reset-password.
+`, d.AppName, d.Provider, d.AppURL),
 		""
 }
 

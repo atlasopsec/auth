@@ -15,7 +15,6 @@ import (
 	"github.com/atlasopsec/auth/internal/db"
 	"github.com/atlasopsec/auth/internal/emailtoken"
 	"github.com/atlasopsec/auth/internal/httpapi"
-	"github.com/atlasopsec/auth/internal/password"
 	"github.com/atlasopsec/auth/internal/session"
 )
 
@@ -35,6 +34,9 @@ func (a *Auth) requestEmailChange(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteDecodeError(w, r, err)
 		return
 	}
+	if !a.requirePassword(w, r, c.user.ID) {
+		return
+	}
 	req.Email = strings.TrimSpace(req.Email)
 	var details []httpapi.FieldError
 	if fe, ok := checkEmail(req.Email); !ok {
@@ -43,7 +45,7 @@ func (a *Auth) requestEmailChange(w http.ResponseWriter, r *http.Request) {
 		details = append(details, httpapi.FieldError{Field: "email", Code: "unchanged", Message: "That's already your email address."})
 	}
 	if req.CurrentPassword == "" {
-		details = append(details, httpapi.FieldError{Field: "current_password", Code: "required", Message: "Enter your current password."})
+		details = append(details, currentPasswordRequired)
 	}
 	if details != nil {
 		writeValidationFailed(w, r, details)
@@ -57,24 +59,11 @@ func (a *Auth) requestEmailChange(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	row, err := a.q.GetUserByID(ctx, c.user.ID)
-	if err != nil {
-		httpapi.WriteInternalError(w, r, a.log, err)
-		return
-	}
-	ok := false
-	if row.PasswordHash == nil {
-		password.SimulateVerify(req.CurrentPassword)
-	} else if ok, err = password.Verify(req.CurrentPassword, *row.PasswordHash); err != nil {
-		httpapi.WriteInternalError(w, r, a.log, fmt.Errorf("verifying password for user %s: %w", row.ID, err))
-		return
-	}
-	if !ok {
-		writeValidationFailed(w, r, []httpapi.FieldError{{Field: "current_password", Code: "incorrect", Message: "Your current password is incorrect."}})
+	if !a.passwordChecked(w, r, c.user.ID, req.CurrentPassword) {
 		return
 	}
 
-	_, err = a.q.GetUserByEmail(ctx, req.Email)
+	_, err := a.q.GetUserByEmail(ctx, req.Email)
 	switch {
 	case err == nil:
 		// Taken: tell its owner, as for a sign-up with their address.
@@ -83,7 +72,7 @@ func (a *Auth) requestEmailChange(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	case errors.Is(err, pgx.ErrNoRows):
-		tok, t, err := a.tokens.Create(ctx, row.ID, emailtoken.ChangeEmail, req.Email)
+		tok, t, err := a.tokens.Create(ctx, c.user.ID, emailtoken.ChangeEmail, req.Email)
 		if err != nil && !errors.Is(err, emailtoken.ErrCooldown) {
 			httpapi.WriteInternalError(w, r, a.log, err)
 			return
@@ -95,7 +84,7 @@ func (a *Auth) requestEmailChange(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteInternalError(w, r, a.log, err)
 		return
 	}
-	a.logEvent(r, "auth: email change requested", row.ID)
+	a.logEvent(r, "auth: email change requested", c.user.ID)
 	w.WriteHeader(http.StatusAccepted)
 }
 

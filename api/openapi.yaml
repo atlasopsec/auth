@@ -287,6 +287,7 @@ paths:
         "204": { description: Password changed. }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthenticated" }
+        "409": { $ref: "#/components/responses/PasswordNotSet" }
         "403": { $ref: "#/components/responses/TwoFactorSetupRequired" }
         "413": { $ref: "#/components/responses/PayloadTooLarge" }
         "422":
@@ -324,6 +325,7 @@ paths:
         "202": { description: Accepted. }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthenticated" }
+        "409": { $ref: "#/components/responses/PasswordNotSet" }
         "403":
           description: >
             `email_not_verified`: verify the current email first, or
@@ -844,7 +846,9 @@ paths:
         account; otherwise, if the provider says the email is verified,
         the account with that email (taking back one whose email was never
         verified) or a new account without a password. Users with 2FA get
-        a challenge instead of a session.
+        a challenge instead of a session. A flow started with
+        `POST /v1/users/me/oauth-accounts` links the provider instead, and
+        needs the same user's session.
       tags: [sessions]
       security: []
       requestBody:
@@ -862,10 +866,13 @@ paths:
       responses:
         "200": { $ref: "#/components/responses/TwoFactorChallenge" }
         "201":
-          description: Logged in.
+          description: Logged in, or, for a link flow, the linked account.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/LoginResponse" }
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/LoginResponse" }
+                  - { $ref: "#/components/schemas/OAuthAccount" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401":
           description: >
@@ -882,9 +889,119 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: >
+            Link flows only: `oauth_account_in_use` (the provider account is
+            linked to another user) or `oauth_already_linked` (the user
+            linked another account with this provider meanwhile).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
         "413": { $ref: "#/components/responses/PayloadTooLarge" }
         "422": { $ref: "#/components/responses/ValidationFailed" }
         "429": { $ref: "#/components/responses/RateLimited" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /v1/users/me/oauth-accounts:
+    get:
+      operationId: listOAuthAccounts
+      summary: List my linked sign-in providers
+      tags: [sessions]
+      responses:
+        "200":
+          description: The linked accounts, oldest first. At most one per provider, so there's never a next page.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, next_cursor]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/OAuthAccount" }
+                  next_cursor: { type: "null" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/TwoFactorSetupRequired" }
+        "500": { $ref: "#/components/responses/InternalError" }
+    post:
+      operationId: startLink
+      summary: Start linking a sign-in provider
+      description: >
+        Like `POST /v1/oauth-flows`, plus the current password if the
+        account has one. Finish with `POST /v1/oauth-flows/complete`, sent
+        with the same session. The user is emailed when it's linked.
+      tags: [sessions]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [provider, client, client_challenge]
+              properties:
+                provider: { type: string, enum: [google, github] }
+                client: { type: string, enum: [web, mobile] }
+                client_challenge: { type: string }
+                current_password: { type: string, description: Required if the account has a password. }
+      responses:
+        "201":
+          description: Flow started.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [authorization_url, expires_at]
+                properties:
+                  authorization_url: { type: string }
+                  expires_at: { type: string, format: date-time }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/TwoFactorSetupRequired" }
+        "409":
+          description: "`oauth_already_linked`: an account with this provider is already linked."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /v1/users/me/oauth-accounts/{id}:
+    delete:
+      operationId: unlink
+      summary: Unlink a sign-in provider
+      description: >
+        Needs the current password if the account has one. The user is
+        emailed when it's removed.
+      tags: [sessions]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                current_password: { type: string, description: Required if the account has a password. }
+      responses:
+        "204": { description: Unlinked. }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/TwoFactorSetupRequired" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: >
+            `last_login_method`: it's the only way left to log in. Set a
+            password or link another provider first.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
         "500": { $ref: "#/components/responses/InternalError" }
 
   /v1/two-factor-challenges/verify:
@@ -1080,6 +1197,17 @@ components:
             (`Config.TwoFactorRoles`), whose sessions end 12 hours after
             login.
 
+    OAuthAccount:
+      type: object
+      required: [id, provider, email, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        provider: { type: string, enum: [google, github] }
+        email:
+          type: string
+          description: The provider's address when linked, for display. Empty if the provider gave none.
+        created_at: { type: string, format: date-time }
+
     SessionInfo:
       type: object
       required: [id, client, ip, user_agent, last_used_at, expires_at, created_at, is_current]
@@ -1199,10 +1327,19 @@ components:
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
+    PasswordNotSet:
+      description: >
+        `password_not_set`: the endpoint needs the current password, but the
+        account has none (it signs in only with Google or GitHub). Offer to
+        set one with a password reset.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
     TwoFactorConflict:
       description: >
         `two_factor_already_enabled`, `two_factor_not_enabled`, or
-        `two_factor_setup_not_started`.
+        `two_factor_setup_not_started`. Endpoints that take the current
+        password can also answer `password_not_set` (see `PasswordNotSet`).
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }

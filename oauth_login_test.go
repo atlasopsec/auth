@@ -382,3 +382,32 @@ func TestOAuthKeepsSecretsOutOfLogs(t *testing.T) {
 		}
 	}
 }
+
+func TestPasswordNotSet(t *testing.T) {
+	t.Parallel()
+	f := setupOAuth(t, Config{})
+	l := loginOf(t, f.googleSignIn(t, ada("g-1")))
+
+	for _, c := range []struct{ method, path, body string }{
+		{http.MethodPost, "/v1/users/me/two-factor", pwBody("")},
+		{http.MethodPost, "/v1/users/me/password", changeBody("", newPassword)},
+		{http.MethodPost, "/v1/email-changes", emailChangeBody("new@example.com", "")},
+	} {
+		wantError(t, c.method+" "+c.path, f.do(t, c.method, c.path, c.body, withToken(l.Token)), 409, "password_not_set")
+	}
+	if f.passwordHash(t, testEmail) != nil {
+		t.Error("a password was set")
+	}
+
+	// With 2FA turned on directly, turning it off or regenerating codes
+	// still needs a password.
+	if _, err := f.pool.Exec(context.Background(), `INSERT INTO auth.totp_secrets (user_id, secret_encrypted, confirmed_at) VALUES ($1, '\x00', now())`, l.User.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ method, path string }{
+		{http.MethodDelete, "/v1/users/me/two-factor"},
+		{http.MethodPost, "/v1/users/me/two-factor/recovery-codes"},
+	} {
+		wantError(t, c.method+" "+c.path, f.do(t, c.method, c.path, pwCodeBody("", "123456"), withToken(l.Token)), 409, "password_not_set")
+	}
+}
