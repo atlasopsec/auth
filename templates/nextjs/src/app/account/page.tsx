@@ -7,18 +7,37 @@ import {
   EndSessionButton,
   LogOutEverywhereButton,
 } from "@/components/auth/account-forms";
+import {
+  LinkProviderForm,
+  UnlinkProviderForm,
+} from "@/components/auth/oauth-buttons";
 import { callApi } from "@/lib/api/client";
-import { sessionListSchema, type SessionInfo } from "@/lib/api/schemas";
+import {
+  oauthAccountsSchema,
+  sessionListSchema,
+  type SessionInfo,
+} from "@/lib/api/schemas";
+import { noticeText } from "@/lib/auth/notices";
+import { PROVIDER_NAMES, enabledProviders } from "@/lib/auth/oauth";
 import { getSessionToken, requireSession } from "@/lib/auth/session";
 
-export default async function AccountPage() {
+export default async function AccountPage({
+  searchParams,
+}: PageProps<"/account">) {
   const session = await requireSession("/account");
-  const { data: sessions } = await callApi("/v1/sessions", sessionListSchema, {
-    token: await getSessionToken(),
-  });
+  const token = await getSessionToken();
+  const [{ data: sessions }, { data: linked }] = await Promise.all([
+    callApi("/v1/sessions", sessionListSchema, { token }),
+    callApi("/v1/users/me/oauth-accounts", oauthAccountsSchema, { token }),
+  ]);
+  const notice = noticeText((await searchParams).notice);
+  const unlinked = enabledProviders()
+    .filter((p) => !linked.some((a) => a.provider === p))
+    .map((id) => ({ id, name: PROVIDER_NAMES[id] }));
   return (
     <>
       <h1 className="text-2xl font-semibold">Account</h1>
+      {notice && <p role="status">{notice}</p>}
 
       <section className="grid gap-4">
         <h2 className="text-lg font-semibold">Email</h2>
@@ -40,6 +59,29 @@ export default async function AccountPage() {
           </Link>
         </p>
       </section>
+
+      {(linked.length > 0 || unlinked.length > 0) && (
+        <section className="grid gap-4">
+          <h2 className="text-lg font-semibold">Sign-in providers</h2>
+          <ul className="grid gap-4">
+            {linked.map((a) => {
+              const name =
+                PROVIDER_NAMES[a.provider as keyof typeof PROVIDER_NAMES] ??
+                a.provider;
+              return (
+                <li key={a.id} className="grid gap-2 text-sm">
+                  <p>
+                    {name}
+                    {a.email && ` (${a.email})`}
+                  </p>
+                  <UnlinkProviderForm id={a.id} name={name} />
+                </li>
+              );
+            })}
+          </ul>
+          <LinkProviderForm providers={unlinked} />
+        </section>
+      )}
 
       <section className="grid gap-4">
         <h2 className="text-lg font-semibold">Where you&apos;re logged in</h2>
