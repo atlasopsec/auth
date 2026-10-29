@@ -2,7 +2,7 @@
 
 The module's public Go API and the HTTP endpoints it serves.
 
-> **Status:** §1–9 cover build steps 3–7 (approved and built). §10 covers build step 8 (rate limiting and the event log), approved and built. §11 covers build step 9 (the Next.js template), approved and being built. Sections marked **(Decision)** were confirmed in review. Later steps add to this but don't change what's here.
+> **Status:** §1–9 cover build steps 3–7 (approved and built). §10 covers build step 8 (rate limiting and the event log), approved and built. §11 covers build step 9 (the Next.js template), approved and built. Everything here is in `v1.0.0`. Sections marked **(Decision)** were confirmed in review. Later steps add to this but don't change what's here.
 
 Once a name below is released, changing or removing it is a breaking change (a new major version), so this is the moment to get it right.
 
@@ -566,7 +566,7 @@ var appRoles = rbac.Roles{
 
 - **Validation:** `New` checks every permission has the form `resource:action` (lowercase letters, digits, `_`), so a typo like `invoice:create` vs `invoices:create` is caught in a test, not silently denied in production. `Require` and `RequireOrg` panic at startup if given a permission that no role has, for the same reason.
 - **Removed roles:** roles live in code, and a role stored in the database but no longer in code grants nothing (and is logged), so deleting a role from code can't leave anyone with stale access.
-- **Default app role:** users have no app role, and so no app permissions, until one is set with `a.SetAppRole(ctx, userID, "support")`. That's a Go call for seed scripts and admin tooling, not an endpoint.
+- **Default app role:** users have no app role, and so no app permissions, until one is set with `a.SetAppRole(ctx, userID, "support", by)`, where `by` is the `Actor` making the change (§10). That's a Go call for seed scripts and admin tooling, not an endpoint.
 
 ### Checking permissions
 
@@ -612,7 +612,7 @@ http.ListenAndServe(addr, a.Protect(mux))
 ### Organizations
 
 - **Who can create one (Decision):** any user with a verified email, through `POST /v1/organizations`. They become its `owner`.
-  - Apps that create organizations themselves (for example, when a client signs a contract) set `Config.DisableOrganizationCreation` and call `a.CreateOrganization(ctx, name, ownerID)` from Go.
+  - Apps that create organizations themselves (for example, when a client signs a contract) set `Config.DisableOrganizationCreation` and call `a.CreateOrganization(ctx, name, ownerID, by)` from Go.
 - **Owners (Decision):** `OrgRoles` must define `owner`. Owners always have every permission, whatever the definition says, so an organization can never be locked out of its own settings.
   - **Every organization keeps at least one owner:** the last owner can't leave, be removed, or be changed to another role (`409 last_owner`).
 - **No privilege escalation (Decision):** you can give someone a role only if you already have every permission in it, and only owners can make someone an owner. Otherwise an admin with `members:manage` could promote themselves or a friend to owner.
@@ -785,7 +785,7 @@ auth.Config{
 	TwoFactorRoles: []string{"owner", "admin", "support"}, // org or app roles
 }
 
-a.SetTwoFactorRequired(ctx, userID, true) // an individual user (the standard)
+a.SetTwoFactorRequired(ctx, userID, true, by) // an individual user (the standard)
 ```
 
 - **A config list, not `rbac.Roles{…}.RequireTwoFactor(…)` as design.md sketched.** `Roles` is a plain map, so the method version couldn't carry the extra information.
@@ -823,7 +823,7 @@ POST /v1/password-resets/confirm
 // ResetTwoFactor turns off a user's 2FA and ends all their sessions. It's
 // for admin tooling and support, after confirming who the user is some
 // other way. There's no endpoint for it.
-func (a *Auth) ResetTwoFactor(ctx context.Context, userID uuid.UUID) error
+func (a *Auth) ResetTwoFactor(ctx context.Context, userID uuid.UUID, by Actor) error
 ```
 
 The user is emailed that 2FA was turned off. If 2FA is required for them, they're asked to set it up again at their next login.
@@ -1140,7 +1140,7 @@ auth.auth_events   id, user_id, actor_id, event, ip, user_agent, metadata, creat
 | `app_role_changed`, `org_role_changed`, `member_added`, `member_removed`, `two_factor_required_changed` | `actor_id` is who made the change; `metadata` has the organization and roles |
 
 - **IDs only:** `user_id` and `actor_id` are IDs. Never passwords, tokens, codes, or email addresses.
-- **Who made a change:** for an invitation, `member_added`'s actor is whoever sent it. Changes made with Go calls (`SetAppRole`, `SetTwoFactorRequired`, `ResetTwoFactor`, `CreateOrganization`) have no actor and no IP, since the module can't know who called it. Admin tooling that needs that should keep its own record.
+- **Who made a change:** for an invitation, `member_added`'s actor is whoever sent it. The Go calls for admin tooling (`SetAppRole`, `SetTwoFactorRequired`, `ResetTwoFactor`, `CreateOrganization`) take a `by Actor` argument: the acting user's ID, IP, and user agent, which become the event's `actor_id`, `ip`, and `user_agent`. `a.ActorOf(r)` fills it in from the request an admin endpoint is handling; the zero `Actor{}` records no one, for seed scripts. Added just before `v1.0.0`, so adding an actor later wouldn't need a breaking change.
 - **Failed logins for unknown emails** are recorded with no `user_id`. They're still useful, by IP, for spotting credential stuffing.
 - **Recorded after the fact, best effort:** an event that fails to write is logged as an error, but doesn't fail the action that already happened.
 - **Kept for 1 year,** then deleted by the cleanup job. Projects with other retention needs can copy events out with the hook below.

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"net/netip"
 	"slices"
 	"sort"
@@ -336,7 +337,7 @@ func TestOrganizationEvents(t *testing.T) {
 		t.Errorf("membership events (-want +got):\n%s", diff)
 	}
 
-	o, err := f.auth.CreateOrganization(context.Background(), "Initech", admin)
+	o, err := f.auth.CreateOrganization(context.Background(), "Initech", admin, Actor{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -350,23 +351,23 @@ func TestAdminEvents(t *testing.T) {
 	f := setupAccess(t)
 	ctx := context.Background()
 	l := f.signUp(t, testEmail)
-	if err := f.auth.SetAppRole(ctx, l.User.ID, "support"); err != nil {
+	if err := f.auth.SetAppRole(ctx, l.User.ID, "support", Actor{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.auth.SetAppRole(ctx, l.User.ID, ""); err != nil {
+	if err := f.auth.SetAppRole(ctx, l.User.ID, "", Actor{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.auth.SetTwoFactorRequired(ctx, l.User.ID, true); err != nil {
+	if err := f.auth.SetTwoFactorRequired(ctx, l.User.ID, true, Actor{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.auth.SetTwoFactorRequired(ctx, l.User.ID, false); err != nil {
+	if err := f.auth.SetTwoFactorRequired(ctx, l.User.ID, false, Actor{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.auth.ResetTwoFactor(ctx, l.User.ID); err != nil {
+	if err := f.auth.ResetTwoFactor(ctx, l.User.ID, Actor{}); err != nil {
 		t.Fatal(err)
 	}
 	f.enableTwoFactor(t, l.Token)
-	if err := f.auth.ResetTwoFactor(ctx, l.User.ID); err != nil {
+	if err := f.auth.ResetTwoFactor(ctx, l.User.ID, Actor{}); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{
@@ -380,7 +381,7 @@ func TestAdminEvents(t *testing.T) {
 	if diff := cmp.Diff(want, f.eventSummaries(t, l.User.ID)); diff != "" {
 		t.Errorf("events (-want +got):\n%s", diff)
 	}
-	if err := f.auth.SetTwoFactorRequired(ctx, uuid.Must(uuid.NewV7()), true); err == nil {
+	if err := f.auth.SetTwoFactorRequired(ctx, uuid.Must(uuid.NewV7()), true, Actor{}); err == nil {
 		t.Error("SetTwoFactorRequired for no user: no error")
 	}
 	var n int
@@ -512,5 +513,72 @@ func TestDeletingUserKeepsEvents(t *testing.T) {
 	var n int
 	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM auth.auth_events WHERE user_id IS NULL AND actor_id IS NULL`).Scan(&n); err != nil || n != 1 {
 		t.Errorf("%d events kept without their users (%v), want 1", n, err)
+	}
+}
+
+func TestAdminEventsRecordTheActor(t *testing.T) {
+	t.Parallel()
+	f := setupAccess(t)
+	ctx := context.Background()
+	admin := f.signUp(t, "admin@example.com")
+	target := f.signUp(t, testEmail)
+
+	// A project's own admin endpoint, as admin tooling would write it.
+	var by Actor
+	h := f.auth.Authenticated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		by = f.auth.ActorOf(r)
+	}))
+	r := httptest.NewRequestWithContext(ctx, http.MethodPost, "/admin", nil)
+	r.RemoteAddr = proxyAddr
+	r.Header.Set("Authorization", "Bearer "+admin.Token)
+	r.Header.Set("X-Forwarded-For", "192.0.2.44")
+	r.Header.Set("X-Forwarded-User-Agent", "AdminTool/1.0")
+	h.ServeHTTP(httptest.NewRecorder(), r)
+	if by.UserID == nil || *by.UserID != admin.User.ID || by.IP == nil || *by.IP != netip.MustParseAddr("192.0.2.44") || by.UserAgent != "AdminTool/1.0" {
+		t.Fatalf("ActorOf = %+v, want the admin from 192.0.2.44 with AdminTool/1.0", by)
+	}
+
+	if err := f.auth.SetAppRole(ctx, target.User.ID, "support", by); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.auth.SetAppRole(ctx, target.User.ID, "", by); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.auth.SetTwoFactorRequired(ctx, target.User.ID, true, by); err != nil {
+		t.Fatal(err)
+	}
+	f.enableTwoFactor(t, target.Token)
+	if err := f.auth.ResetTwoFactor(ctx, target.User.ID, by); err != nil {
+		t.Fatal(err)
+	}
+	o, err := f.auth.CreateOrganization(ctx, "Acme", target.User.ID, by)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var got []string
+	for _, e := range f.eventsOf(t, target.User.ID) {
+		if e.Type == EventTwoFactorEnabled {
+			continue
+		}
+		if e.ActorID == nil || *e.ActorID != admin.User.ID || e.IP == nil || e.IP.String() != "192.0.2.44" || e.UserAgent != "AdminTool/1.0" {
+			t.Errorf("%s: actor %v, IP %v, user agent %q; want the admin's", e.Type, e.ActorID, e.IP, e.UserAgent)
+		}
+		got = append(got, summary(e))
+	}
+	want := []string{
+		"app_role_changed role=support",
+		"app_role_changed role=",
+		"two_factor_required_changed required=true",
+		"two_factor_reset",
+		"member_added organization_id=" + o.ID.String() + " role=owner",
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("events (-want +got):\n%s", diff)
+	}
+
+	// Without a logged-in user, ActorOf names no one.
+	if by := f.auth.ActorOf(httptest.NewRequestWithContext(ctx, http.MethodGet, "/", nil)); by.UserID != nil {
+		t.Errorf("ActorOf without a session: UserID = %v, want nil", by.UserID)
 	}
 }

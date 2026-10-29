@@ -2,5 +2,6 @@
 // APIs: password hashing, sessions, OAuth sign-in, two-factor
 // authentication, and role-based access control.
 //
-// It is pre-release. The API will change until v1.0.0.
+// Its exported API follows semantic versioning: nothing is removed or
+// changed until v2.
 package auth

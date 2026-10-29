@@ -322,8 +322,9 @@ func (a *Auth) writeLoginCodeError(w http.ResponseWriter, r *http.Request, err e
 // for admin tooling and support, for a user who has lost both their
 // authenticator and their recovery codes, after confirming who they are
 // some other way. There's no endpoint for it. The user is emailed that 2FA
-// was turned off. It does nothing for a user without 2FA.
-func (a *Auth) ResetTwoFactor(ctx context.Context, userID uuid.UUID) error {
+// was turned off. It does nothing for a user without 2FA. by is who's
+// resetting it, for the security event log.
+func (a *Auth) ResetTwoFactor(ctx context.Context, userID uuid.UUID, by Actor) error {
 	var email string
 	err := a.withTx(ctx, func(tx pgx.Tx) error {
 		q := db.New(tx)
@@ -359,7 +360,7 @@ func (a *Auth) ResetTwoFactor(ctx context.Context, userID uuid.UUID) error {
 	}
 	if email != "" {
 		a.log.InfoContext(ctx, "auth: two-factor reset", slog.String("user_id", userID.String()))
-		a.recordEvent(ctx, Event{Type: EventTwoFactorReset, UserID: &userID})
+		a.adminEvent(ctx, by, Event{Type: EventTwoFactorReset, UserID: &userID})
 		a.sendNotice(email, a.emails.TwoFactorDisabled)
 	}
 	return nil

@@ -90,6 +90,38 @@ func (a *Auth) event(r *http.Request, typ string, userID, actorID *uuid.UUID, me
 	a.recordEvent(r.Context(), Event{UserID: userID, ActorID: actorID, Type: typ, IP: ip, UserAgent: ua, Metadata: metadata})
 }
 
+// Actor is who makes a change through one of Auth's admin methods
+// (SetAppRole, SetTwoFactorRequired, ResetTwoFactor, and
+// CreateOrganization), and from where, for the security event log. Admin
+// tooling handling a request gets one with ActorOf. The zero Actor records
+// no one, for seed scripts and changes the system makes itself.
+type Actor struct {
+	// UserID is the user making the change.
+	UserID *uuid.UUID
+	// IP and UserAgent are the client they made it from, if known.
+	IP        *netip.Addr
+	UserAgent string
+}
+
+// ActorOf returns the logged-in user making r, with their IP and user
+// agent read the same way as for the module's own endpoints. Without a
+// logged-in user, UserID is nil.
+func (a *Auth) ActorOf(r *http.Request) Actor {
+	ip, ua := httpapi.Client(r, a.trusted)
+	actor := Actor{IP: ip, UserAgent: ua}
+	if u, ok := UserFrom(r.Context()); ok {
+		id := u.ID
+		actor.UserID = &id
+	}
+	return actor
+}
+
+// adminEvent records an event for a change made through an admin method.
+func (a *Auth) adminEvent(ctx context.Context, by Actor, e Event) {
+	e.ActorID, e.IP, e.UserAgent = by.UserID, by.IP, by.UserAgent
+	a.recordEvent(ctx, e)
+}
+
 // recordEvent stores e and runs Hooks.OnEvent. It's best effort: the action
 // already happened, so a failure to record is logged, not returned.
 func (a *Auth) recordEvent(ctx context.Context, e Event) {

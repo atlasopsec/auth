@@ -50,7 +50,8 @@ func sessionPolicy(tf twoFactorState) session.Policy {
 // of Config.TwoFactorRoles. It's for admin tooling, for individual users
 // an admin marks. Until they set 2FA up, they can only set it up, read
 // GET /v1/users/me, and log out. It takes effect on their next request.
-func (a *Auth) SetTwoFactorRequired(ctx context.Context, userID uuid.UUID, required bool) error {
+// by is who's making the change, for the security event log.
+func (a *Auth) SetTwoFactorRequired(ctx context.Context, userID uuid.UUID, required bool, by Actor) error {
 	n, err := a.q.SetTwoFactorRequired(ctx, db.SetTwoFactorRequiredParams{
 		ID:       userID,
 		Required: required,
@@ -62,6 +63,6 @@ func (a *Auth) SetTwoFactorRequired(ctx context.Context, userID uuid.UUID, requi
 	if n == 0 {
 		return fmt.Errorf("auth: setting 2FA required: no user %s", userID)
 	}
-	a.recordEvent(ctx, Event{Type: EventTwoFactorRequiredChanged, UserID: &userID, Metadata: map[string]string{"required": strconv.FormatBool(required)}})
+	a.adminEvent(ctx, by, Event{Type: EventTwoFactorRequiredChanged, UserID: &userID, Metadata: map[string]string{"required": strconv.FormatBool(required)}})
 	return nil
 }
