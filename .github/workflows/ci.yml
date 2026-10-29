@@ -1,4 +1,4 @@
-# Formatting, linting, and tests for the Go module.
+# Formatting, linting, and tests for the Go module and the Next.js template.
 # See: standards/code-style.md and standards/testing.md in jakefrenzel/engineering-standards
 
 name: ci
@@ -37,3 +37,66 @@ jobs:
 
       - name: Test
         run: go test -race ./...
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: templates/nextjs
+    services:
+      # The end-to-end tests run the template against examples/api and a
+      # fresh database.
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: e2e
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 2s --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: templates/nextjs/package.json
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: templates/nextjs/pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Check formatting
+        run: pnpm format:check
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Type check
+        run: pnpm typecheck
+
+      - name: Unit tests
+        run: pnpm test
+
+      - name: Install the browser
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: End-to-end tests
+        run: pnpm test:e2e
+        env:
+          E2E_DATABASE_URL: postgres://postgres@localhost:5432/e2e?sslmode=disable
+
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: playwright-report
+          path: templates/nextjs/test-results
+          retention-days: 7
