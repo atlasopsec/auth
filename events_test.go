@@ -178,16 +178,20 @@ func TestEventDetails(t *testing.T) {
 		withHeader("User-Agent", long), fromIP("192.0.2.7"))
 	f.do(t, http.MethodPost, "/v1/sessions", credentials(testEmail, testPassword, "web"),
 		fromIP("10.0.0.5"), withHeader("X-Forwarded-For", "192.0.2.8"), withHeader("X-Forwarded-User-Agent", "Example/1.0"))
+	// Under 512 characters but over 512 bytes, so kept whole.
+	f.do(t, http.MethodPost, "/v1/sessions", credentials(testEmail, testPassword, "web"),
+		withHeader("User-Agent", strings.Repeat("é", 300)), fromIP("192.0.2.7"))
 
 	events := f.eventsOf(t, l.User.ID)
-	if len(events) != 2 {
-		t.Fatalf("got %d events, want 2", len(events))
+	if len(events) != 3 {
+		t.Fatalf("got %d events, want 3", len(events))
 	}
 	for i, want := range []struct {
 		ip, ua string
 	}{
 		{"192.0.2.7", strings.Repeat("é", 512)},
 		{"192.0.2.8", "Example/1.0"},
+		{"192.0.2.7", strings.Repeat("é", 300)},
 	} {
 		e := events[i]
 		if e.IP == nil || *e.IP != netip.MustParseAddr(want.ip) || e.UserAgent != want.ua {
@@ -415,8 +419,8 @@ func TestEventsPaging(t *testing.T) {
 	t.Parallel()
 	f := setup(t, Hooks{})
 	ctx := context.Background()
-	ada, grace := uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())
-	for _, id := range []uuid.UUID{ada, grace} {
+	ada, grace, hopper := uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())
+	for _, id := range []uuid.UUID{ada, grace, hopper} {
 		if _, err := f.pool.Exec(ctx, `INSERT INTO auth.users (id, email) VALUES ($1, $2)`, id, id.String()+"@example.com"); err != nil {
 			t.Fatal(err)
 		}
@@ -424,6 +428,9 @@ func TestEventsPaging(t *testing.T) {
 	for i := range 120 {
 		f.auth.recordEvent(ctx, Event{Type: EventLogout, UserID: &ada, Metadata: map[string]string{"n": string(rune('a' + i%26))}})
 		f.auth.recordEvent(ctx, Event{Type: EventLogout, UserID: &grace})
+		if i < eventPageSize {
+			f.auth.recordEvent(ctx, Event{Type: EventLogout, UserID: &hopper})
+		}
 	}
 
 	var sizes []int
@@ -454,6 +461,16 @@ func TestEventsPaging(t *testing.T) {
 	}
 	if want := string(rune('a' + 119%26)); all[0].Metadata["n"] != want {
 		t.Errorf("newest event n=%s, want %s", all[0].Metadata["n"], want)
+	}
+
+	// Exactly a page has no next page.
+	if page, err := f.auth.Events(ctx, hopper, ""); err != nil || len(page.Events) != 50 || page.NextCursor != "" {
+		t.Errorf("50 events: %d on the page, cursor %q, error %v; want all 50 and no cursor", len(page.Events), page.NextCursor, err)
+	}
+	// Events without metadata store an empty object, not JSON null.
+	var n int
+	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM auth.auth_events WHERE user_id = $1 AND metadata = '{}'`, grace).Scan(&n); err != nil || n != 120 {
+		t.Errorf("%d of grace's events have empty metadata (%v), want 120", n, err)
 	}
 
 	if _, err := f.auth.Events(ctx, ada, "not-a-cursor"); !errors.Is(err, ErrBadCursor) {
