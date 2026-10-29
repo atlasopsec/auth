@@ -47,9 +47,23 @@ type guarded struct{ http.Handler }
 // token in its Authorization: Bearer header. Otherwise it responds 401 with
 // the standard error format. Inside h, UserFrom and SessionFrom return the
 // logged-in user and their session.
+//
+// A user who must have 2FA but hasn't set it up gets 403
+// two_factor_setup_required, here and under Require and RequireOrg.
 func (a *Auth) Authenticated(h http.Handler) http.Handler {
+	return a.authenticated(h, false)
+}
+
+// duringSetup is Authenticated for the few module routes a user who must
+// set up 2FA can still use: setting it up, reading their account, and
+// logging out.
+func (a *Auth) duringSetup(h http.Handler) http.Handler {
+	return a.authenticated(h, true)
+}
+
+func (a *Auth) authenticated(h http.Handler, setupOK bool) http.Handler {
 	return guarded{httpapi.WithRequestID(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		c, ok := a.authenticate(w, r)
+		c, ok := a.authenticate(w, r, setupOK)
 		if !ok {
 			return
 		}
@@ -57,9 +71,11 @@ func (a *Auth) Authenticated(h http.Handler) http.Handler {
 	}))}
 }
 
-// authenticate checks the request's session. If it isn't valid, it writes
-// the error response and returns false.
-func (a *Auth) authenticate(w http.ResponseWriter, r *http.Request) (current, bool) {
+// authenticate checks the request's session, and that the user may use
+// the app given their 2FA rules. setupOK lets through a user who still has
+// to set up 2FA. If the check fails, it writes the error response and
+// returns false.
+func (a *Auth) authenticate(w http.ResponseWriter, r *http.Request, setupOK bool) (current, bool) {
 	tok, ok := bearerToken(r)
 	if !ok {
 		writeUnauthenticated(w, r)
@@ -74,7 +90,7 @@ func (a *Auth) authenticate(w http.ResponseWriter, r *http.Request) (current, bo
 		httpapi.WriteInternalError(w, r, a.log, err)
 		return current{}, false
 	}
-	row, err := a.q.GetUserByID(r.Context(), s.UserID)
+	row, tf, err := a.userWithTwoFactor(r.Context(), a.q, s.UserID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// The user was deleted between the two queries; their sessions
 		// went with them.
@@ -83,6 +99,20 @@ func (a *Auth) authenticate(w http.ResponseWriter, r *http.Request) (current, bo
 	}
 	if err != nil {
 		httpapi.WriteInternalError(w, r, a.log, err)
+		return current{}, false
+	}
+	// Checked on every request, so a user promoted to a privileged role
+	// after logging in gets the 12-hour limit too.
+	if tf.privileged && !a.now().Before(s.CreatedAt.Add(session.Privileged.MaxLifetime)) {
+		if err := a.sessions.Revoke(r.Context(), s.UserID, s.ID); err != nil && !errors.Is(err, session.ErrNotFound) {
+			httpapi.WriteInternalError(w, r, a.log, err)
+			return current{}, false
+		}
+		writeUnauthenticated(w, r)
+		return current{}, false
+	}
+	if tf.required && !tf.enabled && !setupOK {
+		httpapi.WriteError(w, r, http.StatusForbidden, "two_factor_setup_required", "Set up two-factor authentication to continue.", nil)
 		return current{}, false
 	}
 	return current{user: userFromRow(row), session: s}, true
@@ -103,7 +133,7 @@ func (a *Auth) Require(permission rbac.Permission, h http.Handler) http.Handler 
 		panic(fmt.Sprintf("auth: Require(%q): no role in Config.AppRoles has this permission; is it misspelled?", permission))
 	}
 	return guarded{httpapi.WithRequestID(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		c, ok := a.authenticate(w, r)
+		c, ok := a.authenticate(w, r, false)
 		if !ok {
 			return
 		}
@@ -167,7 +197,7 @@ var orgFromPath = orgSource{
 // unless permission is empty, that their role there grants it.
 func (a *Auth) orgRoute(permission rbac.Permission, src orgSource, h http.Handler) http.Handler {
 	return guarded{httpapi.WithRequestID(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		c, ok := a.authenticate(w, r)
+		c, ok := a.authenticate(w, r, false)
 		if !ok {
 			return
 		}

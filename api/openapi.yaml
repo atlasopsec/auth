@@ -123,6 +123,7 @@ paths:
                     items: { $ref: "#/components/schemas/SessionInfo" }
                   next_cursor: { type: "null" }
         "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/TwoFactorSetupRequired" }
         "500": { $ref: "#/components/responses/InternalError" }
     delete:
       operationId: logOutEverywhere
@@ -132,6 +133,7 @@ paths:
       responses:
         "204": { description: Logged out everywhere. }
         "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/TwoFactorSetupRequired" }
         "500": { $ref: "#/components/responses/InternalError" }
 
   /v1/email-verifications:
@@ -285,6 +287,7 @@ paths:
         "204": { description: Password changed. }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/TwoFactorSetupRequired" }
         "413": { $ref: "#/components/responses/PayloadTooLarge" }
         "422":
           description: >
@@ -322,7 +325,9 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthenticated" }
         "403":
-          description: "`email_not_verified`: verify the current email first."
+          description: >
+            `email_not_verified`: verify the current email first, or
+            `two_factor_setup_required`.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -393,7 +398,7 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthenticated" }
         "403":
-          description: "`email_not_verified`: verify your email first."
+          description: "`email_not_verified`: verify your email first, or `two_factor_setup_required`."
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -418,6 +423,7 @@ paths:
                     items: { $ref: "#/components/schemas/Organization" }
                   next_cursor: { type: "null" }
         "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/TwoFactorSetupRequired" }
         "500": { $ref: "#/components/responses/InternalError" }
 
   /v1/organizations/{id}:
@@ -434,6 +440,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Organization" }
         "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/TwoFactorSetupRequired" }
         "404": { $ref: "#/components/responses/NotFound" }
         "500": { $ref: "#/components/responses/InternalError" }
     patch:
@@ -659,8 +666,8 @@ paths:
         "401": { $ref: "#/components/responses/Unauthenticated" }
         "403":
           description: >
-            `invitation_email_mismatch` (sent to a different address) or
-            `email_not_verified`.
+            `invitation_email_mismatch` (sent to a different address),
+            `email_not_verified`, or `two_factor_setup_required`.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -725,7 +732,9 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthenticated" }
         "403":
-          description: "`two_factor_required`: 2FA is required for this user."
+          description: >
+            `two_factor_required`: 2FA is required for this user, or
+            `two_factor_setup_required`: it's required and not set up yet.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -774,6 +783,7 @@ paths:
         "200": { $ref: "#/components/responses/RecoveryCodes" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/TwoFactorSetupRequired" }
         "409": { $ref: "#/components/responses/TwoFactorConflict" }
         "422": { $ref: "#/components/responses/ValidationFailed" }
         "500": { $ref: "#/components/responses/InternalError" }
@@ -843,6 +853,7 @@ paths:
       responses:
         "204": { description: Session ended. }
         "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/TwoFactorSetupRequired" }
         "404":
           description: "`not_found`: no such session, or it belongs to someone else."
           content:
@@ -925,7 +936,9 @@ components:
           required: [two_factor_enabled, two_factor_required]
           properties:
             two_factor_enabled: { type: boolean }
-            two_factor_required: { type: boolean }
+            two_factor_required:
+              type: boolean
+              description: Whether the user must have 2FA, from their roles or `SetTwoFactorRequired`.
 
     CurrentPassword:
       type: object
@@ -962,7 +975,11 @@ components:
         expires_at:
           type: string
           format: date-time
-          description: When the session ends if it isn't used. Using it pushes this forward.
+          description: >
+            When the session ends if it isn't used. Using it pushes this
+            forward, except for users with a privileged role
+            (`Config.TwoFactorRoles`), whose sessions end 12 hours after
+            login.
 
     SessionInfo:
       type: object
@@ -1042,6 +1059,17 @@ components:
                 minItems: 10
                 maxItems: 10
                 items: { type: string, example: ABCD-EFGH-IJKL-MNOP }
+    TwoFactorSetupRequired:
+      description: >
+        `two_factor_setup_required`: the user must have 2FA (a role in
+        `Config.TwoFactorRoles`, or `SetTwoFactorRequired`) and hasn't set
+        it up. Until they do, they can only set it up, read
+        `GET /v1/users/me`, and log out. Every route behind `Authenticated`,
+        `Require`, or `RequireOrg`, the project's own included, can return
+        this.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
     TwoFactorChallenge:
       description: >
         The password is correct, and the user has 2FA. Send the challenge
@@ -1082,7 +1110,8 @@ components:
     Forbidden:
       description: >
         `forbidden`: logged in, but the user's role doesn't grant the
-        permission the route requires (`Require` or `RequireOrg`).
+        permission the route requires (`Require` or `RequireOrg`). Or
+        `two_factor_setup_required`, as below.
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }

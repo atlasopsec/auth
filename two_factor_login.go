@@ -215,6 +215,8 @@ func (a *Auth) verifyChallenge(w http.ResponseWriter, r *http.Request) {
 		tok   string
 		s     session.Session
 		left  int64
+		// policy is set inside the transaction, from the user's roles.
+		policy session.Policy
 	)
 	err := a.withTx(ctx, func(tx pgx.Tx) error {
 		q := db.New(tx)
@@ -229,9 +231,11 @@ func (a *Auth) verifyChallenge(w http.ResponseWriter, r *http.Request) {
 		if ch.UsedAt != nil || !now.Before(ch.ExpiresAt) || ch.FailedAttempts >= maxChallengeAttempts {
 			return errChallengeInvalid
 		}
-		if user, err = q.GetUserByID(ctx, ch.UserID); err != nil {
-			return fmt.Errorf("reading user: %w", err)
+		var tf twoFactorState
+		if user, tf, err = a.userWithTwoFactor(ctx, q, ch.UserID); err != nil {
+			return err
 		}
+		policy = sessionPolicy(tf)
 
 		if check, err = a.checkLoginCode(ctx, q, ch.UserID, req.Code); err != nil {
 			return err
@@ -253,7 +257,7 @@ func (a *Auth) verifyChallenge(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		ip, ua := httpapi.Client(r, a.trusted)
-		tok, s, err = session.NewManager(tx, a.now).Create(ctx, ch.UserID, session.Meta{Client: session.Client(ch.Client), IP: ip, UserAgent: ua}, session.Standard)
+		tok, s, err = session.NewManager(tx, a.now).Create(ctx, ch.UserID, session.Meta{Client: session.Client(ch.Client), IP: ip, UserAgent: ua}, policy)
 		return err
 	})
 	if err != nil {

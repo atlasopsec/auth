@@ -91,6 +91,16 @@ type Config struct {
 	// roles, checked by Require. Users have no app role until SetAppRole
 	// gives them one. Leave nil if the app doesn't need them.
 	AppRoles rbac.Roles
+
+	// TwoFactorRoles are the privileged roles (the auth standard §6): staff
+	// roles such as "support" always, and "owner" and "admin" when
+	// organizations are shared by teams. Apps where each user gets their
+	// own workspace may leave owner and admin out. A user with one of them,
+	// in any organization, must have 2FA, and their sessions last at most
+	// 12 hours. Until they set 2FA up, they can only set it up, read
+	// GET /v1/users/me, and log out. Each name must be defined in OrgRoles
+	// or AppRoles.
+	TwoFactorRoles []string
 }
 
 // Hooks let a project react to auth events.
@@ -127,6 +137,7 @@ type Auth struct {
 	breach             breachChecker
 	orgRoles           rbac.Roles
 	appRoles           rbac.Roles
+	twoFactorRoles     []string
 	disableOrgCreation bool
 }
 
@@ -169,6 +180,11 @@ func New(cfg Config) (*Auth, error) {
 	if err := cfg.AppRoles.Validate(); err != nil {
 		return nil, fmt.Errorf("auth: Config.AppRoles: %w", err)
 	}
+	for _, role := range cfg.TwoFactorRoles {
+		if !cfg.OrgRoles.Defines(role) && !cfg.AppRoles.Defines(role) {
+			return nil, fmt.Errorf("auth: Config.TwoFactorRoles: %q isn't a role in Config.OrgRoles or Config.AppRoles", role)
+		}
+	}
 	a := &Auth{
 		pool:            cfg.DB,
 		q:               db.New(cfg.DB),
@@ -183,6 +199,7 @@ func New(cfg Config) (*Auth, error) {
 		emails:          cfg.Emails,
 		orgRoles:        cfg.OrgRoles,
 		appRoles:        cfg.AppRoles,
+		twoFactorRoles:  append([]string(nil), cfg.TwoFactorRoles...),
 
 		disableOrgCreation: cfg.DisableOrganizationCreation,
 	}

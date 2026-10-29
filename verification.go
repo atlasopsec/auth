@@ -122,7 +122,8 @@ func (a *Auth) confirmVerification(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	twoFactor, err := twoFactorEnabled(ctx, a.q, row.ID)
+	_, tf, err := a.userWithTwoFactor(ctx, a.q, row.ID)
+	twoFactor := tf.enabled
 	if err == nil && twoFactor {
 		// Nothing is spent while the user is at the guessing limit, so the
 		// link still works afterwards.
@@ -133,7 +134,7 @@ func (a *Auth) confirmVerification(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tok, expires, err := a.verifyAndLogIn(r, row.ID, t.ID, session.Client(req.Client), twoFactor)
+	tok, expires, err := a.verifyAndLogIn(r, row.ID, t.ID, session.Client(req.Client), tf)
 	if errors.Is(err, emailtoken.ErrInvalid) {
 		// A concurrent request used the token first.
 		writeTokenInvalid(w, r)
@@ -158,7 +159,7 @@ func (a *Auth) confirmVerification(w http.ResponseWriter, r *http.Request) {
 // session, all or nothing. For a user with 2FA, it starts a 2FA challenge
 // instead of the session. It returns the session's or challenge's token
 // and when it expires.
-func (a *Auth) verifyAndLogIn(r *http.Request, userID, tokenID uuid.UUID, client session.Client, twoFactor bool) (string, time.Time, error) {
+func (a *Auth) verifyAndLogIn(r *http.Request, userID, tokenID uuid.UUID, client session.Client, tf twoFactorState) (string, time.Time, error) {
 	ctx := r.Context()
 	var (
 		tok     string
@@ -173,13 +174,13 @@ func (a *Auth) verifyAndLogIn(r *http.Request, userID, tokenID uuid.UUID, client
 			return fmt.Errorf("marking email verified: %w", err)
 		}
 		var err error
-		if twoFactor {
+		if tf.enabled {
 			tok, expires, err = a.createChallenge(ctx, q, userID, client)
 			return err
 		}
 		ip, ua := httpapi.Client(r, a.trusted)
 		var s session.Session
-		tok, s, err = session.NewManager(tx, a.now).Create(ctx, userID, session.Meta{Client: client, IP: ip, UserAgent: ua}, session.Standard)
+		tok, s, err = session.NewManager(tx, a.now).Create(ctx, userID, session.Meta{Client: client, IP: ip, UserAgent: ua}, sessionPolicy(tf))
 		expires = s.ExpiresAt
 		return err
 	})
