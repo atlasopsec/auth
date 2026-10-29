@@ -51,6 +51,10 @@ type Emails struct {
 	// added to or removed from their account. Provider is set.
 	OAuthLinked   func(EmailData) (subject, text, html string)
 	OAuthUnlinked func(EmailData) (subject, text, html string)
+	// NewDeviceLogin tells a user their account was logged in to from a
+	// browser or app and network it hasn't been used from in the last 90
+	// days. Device and LoggedInAt are set. Link is empty.
+	NewDeviceLogin func(EmailData) (subject, text, html string)
 }
 
 // EmailData is what an email template can use.
@@ -72,6 +76,12 @@ type EmailData struct {
 	// Provider is the sign-in provider's name, such as "Google", for
 	// OAuthLinked and OAuthUnlinked.
 	Provider string
+	// Device is the browser or app's user agent, as it sent it, for
+	// NewDeviceLogin. It's empty if it sent none. It comes from the client,
+	// so treat it as untrusted text.
+	Device string
+	// LoggedInAt is when the login happened, in UTC, for NewDeviceLogin.
+	LoggedInAt time.Time
 }
 
 func defaultVerifyEmail(d EmailData) (string, string, string) {
@@ -215,6 +225,24 @@ func defaultOAuthUnlinked(d EmailData) (string, string, string) {
 
 If you didn't do this, reset your password now at %s/reset-password.
 `, d.AppName, d.Provider, d.AppURL),
+		""
+}
+
+func defaultNewDeviceLogin(d EmailData) (string, string, string) {
+	device := d.Device
+	if device == "" {
+		device = "unknown"
+	}
+	return "New login to your " + d.AppName + " account",
+		fmt.Sprintf(`Your %s account was just logged in to from a browser or app and network it hasn't been used from recently.
+
+Device: %s
+Time: %s
+
+If this was you, you can ignore this email.
+
+If it wasn't, reset your password now at %s/reset-password, then log out of every device from your account settings.
+`, d.AppName, device, d.LoggedInAt.UTC().Format("2 January 2006 at 15:04 UTC"), d.AppURL),
 		""
 }
 

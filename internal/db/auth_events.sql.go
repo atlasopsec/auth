@@ -55,6 +55,48 @@ func (q *Queries) DeleteAuthEventsBefore(ctx context.Context, before time.Time) 
 	return result.RowsAffected(), nil
 }
 
+const getLoginHistory = `-- name: GetLoginHistory :one
+SELECT
+    EXISTS (
+        SELECT 1 FROM auth.auth_events e
+        WHERE e.user_id = $1 AND e.event = 'login_succeeded'
+    ) AS any_login,
+    EXISTS (
+        SELECT 1 FROM auth.auth_events e
+        WHERE e.user_id = $1 AND e.event = 'login_succeeded' AND e.created_at >= $2
+          AND e.user_agent IS NOT DISTINCT FROM $3
+          AND e.ip << network(set_masklen($4::inet, $5::int))
+    ) AS seen
+`
+
+type GetLoginHistoryParams struct {
+	UserID    *uuid.UUID
+	Since     time.Time
+	UserAgent *string
+	Ip        netip.Addr
+	Bits      int32
+}
+
+type GetLoginHistoryRow struct {
+	AnyLogin bool
+	Seen     bool
+}
+
+// Whether a user has logged in before at all, and whether they have since
+// @since from this user agent and network (@ip masked to @bits).
+func (q *Queries) GetLoginHistory(ctx context.Context, arg GetLoginHistoryParams) (GetLoginHistoryRow, error) {
+	row := q.db.QueryRow(ctx, getLoginHistory,
+		arg.UserID,
+		arg.Since,
+		arg.UserAgent,
+		arg.Ip,
+		arg.Bits,
+	)
+	var i GetLoginHistoryRow
+	err := row.Scan(&i.AnyLogin, &i.Seen)
+	return i, err
+}
+
 const listAuthEvents = `-- name: ListAuthEvents :many
 SELECT id, user_id, actor_id, event, ip, user_agent, metadata, created_at, updated_at FROM auth.auth_events
 WHERE user_id = $1 AND ($2::uuid IS NULL OR id < $2::uuid)
