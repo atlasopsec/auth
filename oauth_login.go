@@ -88,11 +88,11 @@ func newProviders(cfg OAuth, now func() time.Time) (map[string]oauth.Provider, e
 }
 
 func (a *Auth) registerOAuth(mux *http.ServeMux) {
-	mux.Handle("POST /v1/oauth-flows", endpoint(http.HandlerFunc(a.startOAuthFlow)))
-	mux.Handle("POST /v1/oauth-flows/complete", endpoint(http.HandlerFunc(a.completeOAuthFlow)))
-	mux.Handle("POST /v1/apple-sign-ins", endpoint(http.HandlerFunc(a.appleSignIn)))
+	mux.Handle("POST /v1/oauth-flows", endpoint(a.limitIP(limitOAuthStart, http.HandlerFunc(a.startOAuthFlow))))
+	mux.Handle("POST /v1/oauth-flows/complete", endpoint(a.limitIP(limitLogin, http.HandlerFunc(a.completeOAuthFlow))))
+	mux.Handle("POST /v1/apple-sign-ins", endpoint(a.limitIP(limitLogin, http.HandlerFunc(a.appleSignIn))))
 	mux.Handle("GET /v1/users/me/oauth-accounts", endpoint(a.Authenticated(http.HandlerFunc(a.listOAuthAccounts))))
-	mux.Handle("POST /v1/users/me/oauth-accounts", endpoint(a.Authenticated(http.HandlerFunc(a.startLink))))
+	mux.Handle("POST /v1/users/me/oauth-accounts", endpoint(a.Authenticated(a.limitIP(limitOAuthStart, http.HandlerFunc(a.startLink)))))
 	mux.Handle("DELETE /v1/users/me/oauth-accounts/{id}", endpoint(a.Authenticated(http.HandlerFunc(a.unlink))))
 }
 
@@ -166,7 +166,7 @@ func (a *Auth) writeNewFlow(w http.ResponseWriter, r *http.Request, req startOAu
 	expires := now.Add(oauthFlowLifetime)
 	client := session.Client(req.Client)
 	err = a.inTx(r.Context(), func(q *db.Queries) error {
-		if err := q.DeleteSpentOAuthFlows(r.Context(), now); err != nil {
+		if _, err := q.DeleteSpentOAuthFlows(r.Context(), now); err != nil {
 			return fmt.Errorf("deleting spent OAuth flows: %w", err)
 		}
 		return q.CreateOAuthFlow(r.Context(), db.CreateOAuthFlowParams{

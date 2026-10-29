@@ -23,7 +23,7 @@ import (
 const InvitationLifetime = 7 * 24 * time.Hour
 
 func (a *Auth) registerInvitations(mux *http.ServeMux) {
-	mux.Handle("POST /v1/organizations/{id}/invitations", endpoint(a.orgRoute(PermMembersManage, orgFromPath, http.HandlerFunc(a.invite))))
+	mux.Handle("POST /v1/organizations/{id}/invitations", endpoint(a.orgRoute(PermMembersManage, orgFromPath, a.limitIP(limitEmailIP, http.HandlerFunc(a.invite)))))
 	mux.Handle("GET /v1/organizations/{id}/invitations", endpoint(a.orgRoute(PermMembersManage, orgFromPath, http.HandlerFunc(a.listInvitations))))
 	mux.Handle("DELETE /v1/organizations/{id}/invitations/{invitation_id}", endpoint(a.orgRoute(PermMembersManage, orgFromPath, http.HandlerFunc(a.cancelInvitation))))
 	mux.Handle("POST /v1/invitations/accept", endpoint(a.Authenticated(http.HandlerFunc(a.acceptInvitation))))
@@ -71,6 +71,9 @@ func (a *Auth) invite(w http.ResponseWriter, r *http.Request) {
 	}
 	if !a.mayAssign(c.org.Role, req.Role) {
 		writeForbidden(w, r)
+		return
+	}
+	if !a.allowEmailTo(w, r, req.Email) {
 		return
 	}
 

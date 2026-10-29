@@ -258,7 +258,7 @@ Most recently used first. `next_cursor` is always `null`: a user has a handful o
 | **Rate limiting** and the security event log | 8 |
 | Breached-password check on sign-up | 4, with the mailer and outbound HTTP |
 
-**Until step 8, there's no rate limiting.** Nothing should be deployed for real users before `v1.0.0` anyway, but it's the biggest gap in the meantime.
+Rate limiting arrived in step 8 (§10).
 
 ## 5. Decisions
 
@@ -1100,6 +1100,8 @@ Every limit answers `429 rate_limited` with `Retry-After`, the code §8 already 
 - **The IP is the client's,** from `X-Forwarded-For` through `Config.TrustedProxies` (§3).
 - **No configuration at first.** These are defaults every project gets; knobs can be added later if one needs different numbers.
 - **The last row** covers a gap left in step 6, where a stolen session plus repeated password guesses on the logged-in endpoints had no limit.
+- **The login limit also covers `POST /v1/password-resets/confirm`,** which takes 2FA codes too.
+- **Per-IP limits count every request; the wrong-code limit counts only wrong codes.** Once a limit is reached, requests are refused without being checked.
 
 ### Failed logins slow down, never lock (Decision)
 
@@ -1149,13 +1151,13 @@ The standard says users SHOULD be emailed about logins from a new device.
 
 Expired sessions, email tokens, 2FA challenges, OAuth flows, old rate-limit windows, and events over a year old all pile up today.
 
-- **A background job,** started by `New` and stopped by `Close` like the email sender, deletes them **once an hour**.
+- **A background job,** started by `New` and stopped by `Close` like the email sender, deletes them **once an hour**. It first runs 5 minutes after start, so a deploy doesn't set every instance off at once.
 - **Several API instances** each run it, which is harmless, since the deletes don't conflict.
 - **`Config.DisableCleanup`** is for projects that would rather schedule it themselves, with `a.Cleanup(ctx)`.
 
 ### Database
 
-Migration `00008`: `auth.rate_limits` and `auth.auth_events`, as above, with indexes on `auth_events (user_id, created_at)` and `(created_at)`.
+Migration `00008` (PR 1): `auth.rate_limits`, with an `expires_at` column (the window's end) for cleanup, plus the `id`, `created_at`, and `updated_at` every table has. `auth.auth_events` comes with the event log in PR 3, in its own migration, with indexes on `(user_id, created_at)` and `(created_at)`.
 
 ### New error codes
 

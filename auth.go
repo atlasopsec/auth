@@ -17,6 +17,7 @@ import (
 	"github.com/atlasopsec/auth/internal/emailtoken"
 	"github.com/atlasopsec/auth/internal/oauth"
 	"github.com/atlasopsec/auth/internal/pwned"
+	"github.com/atlasopsec/auth/internal/ratelimit"
 	"github.com/atlasopsec/auth/internal/secretbox"
 	"github.com/atlasopsec/auth/internal/sender"
 	"github.com/atlasopsec/auth/internal/session"
@@ -105,6 +106,10 @@ type Config struct {
 
 	// OAuth turns on signing in with Google and GitHub.
 	OAuth OAuth
+
+	// DisableCleanup stops the module deleting expired data every hour in
+	// the background. Call Auth.Cleanup on your own schedule instead.
+	DisableCleanup bool
 }
 
 // Hooks let a project react to auth events.
@@ -145,7 +150,13 @@ type Auth struct {
 	// providers are the OAuth providers turned on, by name.
 	providers map[string]oauth.Provider
 	// apple is nil unless native Sign in with Apple is on.
-	apple              *oauth.Apple
+	apple   *oauth.Apple
+	limiter *ratelimit.Limiter
+	// stopCleanup stops the background cleanup job; nil if it's off.
+	stopCleanup func()
+	// afterCleanup, if set, runs after each background cleanup. Tests use
+	// it to wait for one.
+	afterCleanup       func()
 	disableOrgCreation bool
 }
 
@@ -271,18 +282,26 @@ func New(cfg Config) (*Auth, error) {
 		}
 		a.apple = oauth.NewApple(ap.BundleIDs, oauth.DefaultAppleEndpoints(), a.now)
 	}
+	a.limiter = ratelimit.New(cfg.DB, a.now)
 	a.sessions = session.NewManager(cfg.DB, a.now)
 	a.tokens = emailtoken.NewManager(cfg.DB, a.now)
 	a.sender = sender.New(cfg.Mailer, a.log)
+	if !cfg.DisableCleanup {
+		a.startCleanup(cleanupFirst, cleanupEvery)
+	}
 	if _, ok := cfg.Mailer.(*mail.Writer); ok {
 		a.log.Warn("auth: emails are printed by mail.Writer, not sent. Their links contain live tokens: never use mail.Writer in production")
 	}
 	return a, nil
 }
 
-// Close waits for emails that are still being sent, until ctx is done.
-// Call it when the server shuts down, after it stops accepting requests.
+// Close stops the cleanup job and waits for emails that are still being
+// sent, until ctx is done. Call it when the server shuts down, after it
+// stops accepting requests.
 func (a *Auth) Close(ctx context.Context) error {
+	if a.stopCleanup != nil {
+		a.stopCleanup()
+	}
 	if err := a.sender.Close(ctx); err != nil {
 		return fmt.Errorf("auth: closing: %w", err)
 	}

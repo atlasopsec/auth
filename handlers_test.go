@@ -5,13 +5,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -197,6 +200,20 @@ type reqOpt func(*http.Request)
 
 func withHeader(k, v string) reqOpt { return func(r *http.Request) { r.Header.Set(k, v) } }
 func withToken(tok string) reqOpt   { return withHeader("Authorization", "Bearer "+tok) }
+
+// fromIP sends the request from addr, as a separate client.
+func fromIP(addr string) reqOpt {
+	return func(r *http.Request) { r.RemoteAddr = net.JoinHostPort(addr, "5000") }
+}
+
+var testIPs atomic.Uint32
+
+// nextTestIP returns a new address in 198.51.100.0/24-style test ranges,
+// for requests that should count as separate clients.
+func nextTestIP() string {
+	n := testIPs.Add(1)
+	return fmt.Sprintf("198.51.%d.%d", (n>>8)%256, n%256)
+}
 
 func (f fixture) do(t *testing.T, method, path, body string, opts ...reqOpt) response {
 	t.Helper()

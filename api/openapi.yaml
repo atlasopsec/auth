@@ -47,6 +47,7 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
         "413": { $ref: "#/components/responses/PayloadTooLarge" }
         "422": { $ref: "#/components/responses/ValidationFailed" }
+        "429": { $ref: "#/components/responses/RateLimited" }
         "500": { $ref: "#/components/responses/InternalError" }
 
   /v1/users/me:
@@ -155,6 +156,7 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "413": { $ref: "#/components/responses/PayloadTooLarge" }
         "422": { $ref: "#/components/responses/ValidationFailed" }
+        "429": { $ref: "#/components/responses/RateLimited" }
         "500": { $ref: "#/components/responses/InternalError" }
 
   /v1/email-verifications/confirm:
@@ -223,6 +225,7 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "413": { $ref: "#/components/responses/PayloadTooLarge" }
         "422": { $ref: "#/components/responses/ValidationFailed" }
+        "429": { $ref: "#/components/responses/RateLimited" }
         "500": { $ref: "#/components/responses/InternalError" }
 
   /v1/password-resets/confirm:
@@ -342,6 +345,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+        "429": { $ref: "#/components/responses/RateLimited" }
         "500": { $ref: "#/components/responses/InternalError" }
 
   /v1/email-changes/confirm:
@@ -592,6 +596,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
         "422": { $ref: "#/components/responses/ValidationFailed" }
+        "429": { $ref: "#/components/responses/RateLimited" }
         "500": { $ref: "#/components/responses/InternalError" }
     get:
       operationId: listInvitations
@@ -834,6 +839,7 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "413": { $ref: "#/components/responses/PayloadTooLarge" }
         "422": { $ref: "#/components/responses/ValidationFailed" }
+        "429": { $ref: "#/components/responses/RateLimited" }
         "500": { $ref: "#/components/responses/InternalError" }
 
   /v1/oauth-flows/complete:
@@ -1015,6 +1021,7 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
         "413": { $ref: "#/components/responses/PayloadTooLarge" }
         "422": { $ref: "#/components/responses/ValidationFailed" }
+        "429": { $ref: "#/components/responses/RateLimited" }
         "500": { $ref: "#/components/responses/InternalError" }
 
   /v1/users/me/oauth-accounts/{id}:
@@ -1369,8 +1376,9 @@ components:
           schema: { $ref: "#/components/schemas/Error" }
     RateLimited:
       description: >
-        `rate_limited`: 10 wrong 2FA codes in 15 minutes paused code checks
-        for this user. Try again after `Retry-After` seconds.
+        `rate_limited`: too many requests from this IP or to this address,
+        or too many wrong 2FA codes (10 in 15 minutes pause a user's code
+        checks). Try again after `Retry-After` seconds. See docs/api.md §10 for the limits.
       headers:
         Retry-After:
           schema: { type: integer }

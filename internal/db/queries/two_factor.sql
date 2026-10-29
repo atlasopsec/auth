@@ -77,3 +77,10 @@ SELECT created_at FROM auth.two_factor_failures
 WHERE user_id = @user_id AND created_at > @since
 ORDER BY created_at DESC
 OFFSET @n LIMIT 1;
+
+-- name: DeleteEndedTwoFactorChallenges :execrows
+DELETE FROM auth.two_factor_challenges
+WHERE used_at IS NOT NULL OR expires_at <= @now OR failed_attempts >= @max_failed_attempts;
+
+-- name: DeleteTwoFactorFailuresBefore :execrows
+DELETE FROM auth.two_factor_failures WHERE created_at <= @before;

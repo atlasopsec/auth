@@ -1,4 +1,4 @@
--- name: DeleteSpentOAuthFlows :exec
+-- name: DeleteSpentOAuthFlows :execrows
 DELETE FROM auth.oauth_flows WHERE used_at IS NOT NULL OR expires_at <= @now;
 
 -- name: CreateOAuthFlow :exec
