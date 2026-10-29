@@ -2,7 +2,7 @@
 
 The module's public Go API and the HTTP endpoints it serves.
 
-> **Status:** §1–9 cover build steps 3–7 (approved and built). §10 covers build step 8 (rate limiting and the event log), approved and being built. Sections marked **(Decision)** were confirmed in review. Later steps add to this but don't change what's here.
+> **Status:** §1–9 cover build steps 3–7 (approved and built). §10 covers build step 8 (rate limiting and the event log), approved and built. §11 covers build step 9 (the Next.js template), proposed for review. Sections marked **(Decision)** were confirmed in review. Later steps add to this but don't change what's here.
 
 Once a name below is released, changing or removing it is a breaking change (a new major version), so this is the moment to get it right.
 
@@ -1188,3 +1188,134 @@ Confirmed in review on 2026-10-29:
 4. **The event log:** the events listed, IDs only, best effort, kept for 1 year, `a.Events` for tooling, and `Hooks.OnEvent`.
 5. **New-device emails:** on by default, a 90-day memory of user agent and network, and a config switch to turn them off.
 6. **An hourly cleanup job** for everything that expires, on by default.
+
+## 11. Step 9: the Next.js template
+
+Step 9 adds the web half of the [auth standard](https://github.com/jakefrenzel/engineering-standards/blob/main/standards/auth.md): the `__Host-session` cookie, `proxy.ts`, a session helper every protected page and server action calls, and the pages a user needs. Until now the module has worked only for mobile apps and tests; the links in its emails and the OAuth redirects all point at pages that don't exist yet.
+
+The auth standard says these pieces are **copied** into projects, not installed, since they're small and get restyled anyway.
+
+### What the template is (Decision)
+
+- **A complete, runnable Next.js app** in `templates/nextjs/`: Next.js 16 (App Router), React 19, TypeScript, Tailwind, and shadcn/ui, the stack standard's choices, with pnpm.
+- **Projects copy parts of it,** not the whole app. Its README lists what to copy: `src/proxy.ts`, `src/lib/auth/`, `src/lib/api/`, `src/app/(auth)/`, `src/app/account/`, and `src/components/auth/`. They're kept separate from the rest of the template so a project can copy them into its own app.
+- **It's runnable so it can be tested.** CI builds it and runs its unit tests and a small Playwright suite against a real Go API and Postgres, the same way a project's would.
+- **Versioned with the module.** The template's README says which module version it was written for, and its own `CHANGELOG.md` notes what changed, so projects know when to copy again. Copied files carry a one-line header naming the template version.
+- **An example Go API** in `examples/api/` (a `main` package, outside the module's public packages) serves the template in development and in the Playwright tests. It's also the reference for wiring `auth.New` in a project. It uses `mail.Writer`, which prints emails instead of sending them, and the Playwright tests read the links from its output.
+
+### Pages (Decision)
+
+| Path | What it does | Logged in? |
+|---|---|---|
+| `/login` | Email and password, plus "Sign in with Google / GitHub" buttons for the providers the project turned on | No |
+| `/login/two-factor` | Enter a 2FA or recovery code after the password or provider | No (holds a challenge) |
+| `/sign-up` | Email and password. Then "check your email", or logged in if the project allows unverified logins | No |
+| `/forgot-password`, `/reset-password` | Request a link; set a new password from it (with a 2FA code if the user has 2FA) | No |
+| `/verify-email` | Confirm the address from the email link, which also logs in | No |
+| `/confirm-email-change` | Confirm a new address from the email link | Either |
+| `/accept-invitation` | Join an organization from the invitation link; asks to log in or sign up first | Yes |
+| `/oauth/callback`, `/oauth/callback/mobile` | Where Google and GitHub send the browser back (§9) | No |
+| `/account` | Change password and email; turn 2FA on or off and regenerate recovery codes; see and end sessions, or log out everywhere; link and unlink providers | Yes |
+| `/dashboard` | A stand-in protected page, showing how a project's own pages use the session helper | Yes |
+
+- **Plain and unbranded,** built from shadcn/ui's form components. Projects restyle them.
+- **No Apple button:** Apple sign-in is native iOS only (§9).
+- **Required 2FA:** a user who must set up 2FA (§8) is sent to the 2FA part of `/account` from every protected page until they do. The Go API already refuses everything else for them; this just avoids showing them errors.
+
+### The session cookie (Decision)
+
+| Setting | Value |
+|---|---|
+| Name | `__Host-session` |
+| `HttpOnly`, `Secure`, `SameSite` | On, on, `Lax` |
+| `Path` | `/` |
+| `Max-Age` | Until the session's **absolute** expiry: 90 days, or 12 hours for privileged users |
+
+- **Why the absolute expiry:** the standard says `Max-Age` matches the session's expiry, but sessions slide: each use can push the 30-day idle expiry later, and Next.js can't rewrite cookies while rendering a page. A cookie set to the idle expiry would vanish while its session was still valid. Setting it to the latest the session can ever last means the cookie never outlives a session that's still usable, and the Go API ends it sooner when it's idle.
+- **This needs one addition to the Go API:** the login responses gain `absolute_expires_at` beside `expires_at`. Adding a field is backward compatible.
+- **A cookie whose session has ended** is treated as logged out: the session helper finds no user, and the page redirects to `/login`. Logging in again replaces the cookie.
+- **Development on `http://localhost` works:** browsers treat localhost as secure, so `Secure` and `__Host-` cookies are kept there.
+
+### Calling the Go API (Decision)
+
+- **`src/lib/api/`** is the typed client. It's server-only (`import "server-only"`), so it can't end up in the browser bundle.
+- **Every call sends** the token as `Authorization: Bearer`, the browser's IP as `X-Forwarded-For`, and the browser's user agent as `X-Forwarded-User-Agent` (§3). Without the last two, every rate limit would count the web server as one client, and every login would look like it came from the same device.
+- **The browser's IP** is read from one header the hosting edge sets, named by the `CLIENT_IP_HEADER` setting, defaulting to Railway's `X-Real-IP`. Railway's edge overwrites that header on every request, according to its staff, but this is something to check on a real deploy before trusting it: the template's README says how. The Go API's `Config.TrustedProxies` must list Railway's private network, so it believes these headers only from the web app.
+- **Responses are checked with Zod,** as the code-style standard recommends for our own API.
+- **Errors:** the API's `message` is safe to show (§3), so forms show it as-is. Field errors in `details` are shown next to their field. `429` shows the message and how long to wait.
+
+### Sessions in pages (Decision)
+
+- **`getSession()`** calls `GET /v1/users/me` with the cookie's token and returns the user, or `null`. It's wrapped in React's `cache()`, so a page and its components share one call per request.
+- **`requireSession()`** is what protected pages and server actions call. With no session, it redirects to `/login?next=<the current path>`. If 2FA setup is required, it redirects to the setup page.
+- **`proxy.ts`** only checks that the cookie is there, and redirects to `/login` if not, before anything renders. It never calls the Go API: it's the fast first filter, and `requireSession()` is the real check.
+- **`next` only accepts a path on this site** (starting with a single `/`), so the login page can't be used to send people to another site.
+
+### Forms (Decision)
+
+- **Every form posts to a server action,** which validates its input with Zod, calls the Go API, and sets or clears cookies. Server actions check the `Origin` header themselves, which with `SameSite=Lax` covers CSRF (the auth standard's §8).
+- **The forms are small client components** using `useActionState`, to show errors without losing what was typed. They also work before JavaScript loads.
+- **Logging out** deletes the session through the Go API, then clears the cookie. If the API can't be reached, the cookie is kept and the user is told to try again: the standard says clearing only the cookie isn't enough. A `401` means the session already ended, so the cookie is cleared.
+
+### Tokens in email links (Decision)
+
+- The token is after `#` (§6), which never reaches the server. So each link page has a small client component that reads it, removes it from the address bar with `history.replaceState`, and posts it to a server action.
+- Pages that need more than the token (a new password, a 2FA code) show their form first and send the token with it.
+
+### 2FA at login (Decision)
+
+- When a login answers with a 2FA challenge, the server action stores the challenge token in a second `HttpOnly` cookie, `__Host-two-factor`, that lasts as long as the challenge (5 minutes), and redirects to `/login/two-factor`.
+- The code form sends the challenge token from that cookie. On success, the cookie is cleared and the session cookie set.
+- The token stays out of the address bar and the page, and a reload doesn't lose it.
+
+### OAuth on the web (Decision)
+
+- **Starting:** the "Sign in with Google" button posts to a server action. It makes a random client verifier, keeps it in a 10-minute `HttpOnly` cookie, `__Host-oauth`, sends its SHA-256 to `POST /v1/oauth-flows`, and redirects the browser to the provider.
+- **Finishing:** `/oauth/callback` is a route handler, not a page, since only route handlers and server actions can set cookies. It sends `code`, `state`, and the verifier from the cookie to `POST /v1/oauth-flows/complete`, clears the verifier cookie, and then sets the session cookie, or the 2FA cookie, and redirects.
+- **No `Origin` check on the callback,** although the standard asks for one on route handlers that change data. The provider's redirect is a plain navigation, so there's no `Origin` to check. The verifier cookie protects it instead: only the browser that started the flow has it, which is what stops someone finishing their own flow in a victim's browser (§9). The handler's comment says so.
+- **Linking** a provider from `/account` works the same way, with the user's session.
+- **`/oauth/callback/mobile`** is a route handler that redirects to `MOBILE_OAUTH_REDIRECT_URL` (the app's deep link, e.g. `exampleapp://oauth`) with the same `code` and `state`. Without that setting it answers `404`.
+
+### Settings
+
+`src/lib/env.ts` validates these with Zod at startup:
+
+| Variable | Example | Required |
+|---|---|---|
+| `API_URL` | `http://api.railway.internal:8080` | Yes |
+| `OAUTH_PROVIDERS` | `google,github` | No (none) |
+| `MOBILE_OAUTH_REDIRECT_URL` | `exampleapp://oauth` | No |
+| `CLIENT_IP_HEADER` | `x-real-ip` | No (`x-real-ip`) |
+
+None are `NEXT_PUBLIC_`, and none are secrets. They go in `.env.example` with fake values.
+
+### Testing
+
+- **Vitest** for `src/lib/` (the API client, the session helpers, the `next` check, cookie settings, error mapping), with **MSW** faking the Go API.
+- **React Testing Library** for the form components: errors shown on the right field, the fragment token read and removed.
+- **Playwright** against `examples/api` and Postgres, for the critical flows only:
+  - logged out, `/dashboard` and `/account` redirect to `/login` without showing anything;
+  - sign up, verify the email, and log in;
+  - log in with 2FA;
+  - log out, and the old cookie no longer works;
+  - reset a password from the emailed link.
+- **CI** gets a `web` job: `pnpm lint`, `tsc --noEmit`, Prettier, Vitest, `next build`, and Playwright. Dependabot updates the template's npm packages weekly, like the Go modules.
+
+### PRs
+
+1. **Go:** `absolute_expires_at` in the login responses, and `examples/api`.
+2. **The template's base:** the app, `lib/env`, `lib/api`, the session helpers, the cookie, `proxy.ts`, log in, sign up, log out, 2FA at login, `/dashboard`, the CI job, and the first Playwright tests.
+3. **Email-link pages:** verify email, forgot and reset password, confirm email change, accept invitation.
+4. **`/account`:** password, email, 2FA, sessions, and the required-2FA redirect.
+5. **OAuth:** the buttons, both callbacks, and linking and unlinking.
+
+### Decisions
+
+Proposed, for review:
+
+1. **A runnable template app** in `templates/nextjs/`, of which projects copy the auth parts, versioned with the module, plus an `examples/api` Go server for development and tests.
+2. **The pages in the table above,** plain and unbranded, including `/account`, and no Apple button.
+3. **The session cookie lasts until the session's absolute expiry,** with `absolute_expires_at` added to the login responses.
+4. **The API client forwards the browser's IP and user agent,** reading the IP from one header (`X-Real-IP` by default on Railway), to be checked on a real deploy.
+5. **Server actions for every form,** a short-lived cookie for the 2FA challenge, and a route handler for the OAuth callback, protected by its verifier cookie instead of an `Origin` check.
+6. **Tests:** Vitest and MSW for `lib/`, React Testing Library for forms, and Playwright against the example API for the five critical flows.
