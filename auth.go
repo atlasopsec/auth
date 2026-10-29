@@ -143,7 +143,9 @@ type Auth struct {
 	appRoles       rbac.Roles
 	twoFactorRoles []string
 	// providers are the OAuth providers turned on, by name.
-	providers          map[string]oauth.Provider
+	providers map[string]oauth.Provider
+	// apple is nil unless native Sign in with Apple is on.
+	apple              *oauth.Apple
 	disableOrgCreation bool
 }
 
@@ -262,6 +264,12 @@ func New(cfg Config) (*Auth, error) {
 	}
 	if a.providers, err = newProviders(cfg.OAuth, a.now); err != nil {
 		return nil, err
+	}
+	if ap := cfg.OAuth.Apple; ap != nil {
+		if len(ap.BundleIDs) == 0 {
+			return nil, errors.New("auth: Config.OAuth.Apple needs at least one bundle ID")
+		}
+		a.apple = oauth.NewApple(ap.BundleIDs, oauth.DefaultAppleEndpoints(), a.now)
 	}
 	a.sessions = session.NewManager(cfg.DB, a.now)
 	a.tokens = emailtoken.NewManager(cfg.DB, a.now)
