@@ -137,7 +137,7 @@ func (a *Auth) confirmVerification(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tok, expires, err := a.verifyAndLogIn(r, row.ID, t.ID, session.Client(req.Client), tf)
+	tok, expires, s, err := a.verifyAndLogIn(r, row.ID, t.ID, session.Client(req.Client), tf)
 	if errors.Is(err, emailtoken.ErrInvalid) {
 		// A concurrent request used the token first.
 		writeTokenInvalid(w, r)
@@ -156,18 +156,19 @@ func (a *Auth) confirmVerification(w http.ResponseWriter, r *http.Request) {
 	a.event(r, EventLoginSucceeded, &row.ID, nil, map[string]string{"method": "verification_link"})
 	user := userFromRow(row)
 	user.EmailVerified = true
-	httpapi.WriteJSON(w, r, http.StatusCreated, loginResponse{User: toUserJSON(user), Token: tok, ExpiresAt: timestamp(expires)})
+	httpapi.WriteJSON(w, r, http.StatusCreated, newLoginResponse(toUserJSON(user), tok, s))
 }
 
 // verifyAndLogIn spends the token, marks the email verified, and starts a
 // session, all or nothing. For a user with 2FA, it starts a 2FA challenge
-// instead of the session. It returns the session's or challenge's token
-// and when it expires.
-func (a *Auth) verifyAndLogIn(r *http.Request, userID, tokenID uuid.UUID, client session.Client, tf twoFactorState) (string, time.Time, error) {
+// instead of the session. It returns the session's or challenge's token,
+// when the challenge expires, and the session.
+func (a *Auth) verifyAndLogIn(r *http.Request, userID, tokenID uuid.UUID, client session.Client, tf twoFactorState) (string, time.Time, session.Session, error) {
 	ctx := r.Context()
 	var (
 		tok     string
 		expires time.Time
+		s       session.Session
 	)
 	err := a.withTx(ctx, func(tx pgx.Tx) error {
 		if err := emailtoken.NewManager(tx, a.now).Use(ctx, tokenID); err != nil {
@@ -183,15 +184,13 @@ func (a *Auth) verifyAndLogIn(r *http.Request, userID, tokenID uuid.UUID, client
 			return err
 		}
 		ip, ua := httpapi.Client(r, a.trusted)
-		var s session.Session
 		tok, s, err = session.NewManager(tx, a.now).Create(ctx, userID, session.Meta{Client: client, IP: ip, UserAgent: ua}, sessionPolicy(tf))
-		expires = s.ExpiresAt
 		return err
 	})
 	if err != nil {
-		return "", time.Time{}, err
+		return "", time.Time{}, session.Session{}, err
 	}
-	return tok, expires, nil
+	return tok, expires, s, nil
 }
 
 func writeTokenInvalid(w http.ResponseWriter, r *http.Request) {

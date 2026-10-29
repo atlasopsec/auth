@@ -23,6 +23,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/atlasopsec/auth/internal/oauth/oauthtest"
 	"github.com/atlasopsec/auth/internal/password"
 	"github.com/atlasopsec/auth/internal/testdb"
 	"github.com/atlasopsec/auth/internal/token"
@@ -243,8 +244,9 @@ type loginJSON struct {
 		EmailVerified bool      `json:"email_verified"`
 		CreatedAt     string    `json:"created_at"`
 	} `json:"user"`
-	Token     string `json:"token"`
-	ExpiresAt string `json:"expires_at"`
+	Token             string `json:"token"`
+	ExpiresAt         string `json:"expires_at"`
+	AbsoluteExpiresAt string `json:"absolute_expires_at"`
 }
 
 func (f fixture) signUp(t *testing.T, email string) loginJSON {
@@ -946,5 +948,62 @@ func TestPublic(t *testing.T) {
 	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil))
 	if !called {
 		t.Error("Public() handler wasn't called for a logged-out request")
+	}
+}
+
+// expiries returns how long after now a login response's session expires
+// if unused, and at the latest.
+func (f fixture) expiries(t *testing.T, what string, res response) (idle, absolute time.Duration) {
+	t.Helper()
+	var l loginJSON
+	if res.status != http.StatusCreated || json.Unmarshal(res.body, &l) != nil {
+		t.Fatalf("%s: want a login, got status %d, body %s", what, res.status, res.body)
+	}
+	exp, err := time.Parse(time.RFC3339, l.ExpiresAt)
+	if err != nil {
+		t.Fatalf("%s: expires_at: %v", what, err)
+	}
+	abs, err := time.Parse(time.RFC3339, l.AbsoluteExpiresAt)
+	if err != nil {
+		t.Fatalf("%s: absolute_expires_at: %v", what, err)
+	}
+	return exp.Sub(f.clock.now()), abs.Sub(f.clock.now())
+}
+
+func TestLoginResponsesIncludeAbsoluteExpiry(t *testing.T) {
+	t.Parallel()
+	f := setupOAuth(t, Config{AllowUnverifiedLogin: true})
+	want := func(what string, res response, idle, absolute time.Duration) {
+		t.Helper()
+		if gotIdle, gotAbs := f.expiries(t, what, res); gotIdle != idle || gotAbs != absolute {
+			t.Errorf("%s: expires in %v, at the latest %v; want %v and %v", what, gotIdle, gotAbs, idle, absolute)
+		}
+	}
+	signUp := f.do(t, http.MethodPost, "/v1/users", credentials(testEmail, testPassword, "web"))
+	want("sign-up", signUp, 30*day, 90*day)
+	want("log in", f.do(t, http.MethodPost, "/v1/sessions", credentials(testEmail, testPassword, "web")), 30*day, 90*day)
+
+	var l loginJSON
+	if err := json.Unmarshal(signUp.body, &l); err != nil {
+		t.Fatal(err)
+	}
+	secret, _ := f.enableTwoFactor(t, l.Token)
+	want("2FA", f.verify(t, f.startChallenge(t, testEmail), f.code(secret)), 30*day, 90*day)
+	want("Google", f.googleSignIn(t, oauthtest.GoogleUser{Subject: "g-2", Email: "grace@example.com", EmailVerified: true}), 30*day, 90*day)
+
+	p := setupPrivileged(t)
+	admin := p.signUp(t, "admin@example.com")
+	p.addMember(t, p.newOrg(t), admin.User.ID, "admin")
+	adminSecret, _ := p.enableTwoFactor(t, admin.Token)
+	res := p.verify(t, p.startChallenge(t, "admin@example.com"), p.code(adminSecret))
+	if idle, abs := p.expiries(t, "privileged", res); idle != 12*time.Hour || abs != 12*time.Hour {
+		t.Errorf("privileged: expires in %v, at the latest %v; want 12h for both", idle, abs)
+	}
+
+	v := verifyFirst(t)
+	v.do(t, http.MethodPost, "/v1/users", credentials(testEmail, testPassword, "web"))
+	_, tok := linkIn(t, v.emailsTo(testEmail)[0])
+	if idle, abs := v.expiries(t, "verification link", v.do(t, http.MethodPost, "/v1/email-verifications/confirm", confirmBody(tok, testPassword))); idle != 30*day || abs != 90*day {
+		t.Errorf("verification link: expires in %v, at the latest %v; want 30 and 90 days", idle, abs)
 	}
 }
