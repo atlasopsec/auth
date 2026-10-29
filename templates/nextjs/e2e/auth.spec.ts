@@ -8,14 +8,15 @@ import {
   newIP,
   totp,
   verifiedUser,
+  field,
 } from "./helpers";
 import { API_URL } from "../playwright.config";
 
 test.use({ extraHTTPHeaders: { "x-real-ip": newIP() } });
 
 async function logIn(page: import("@playwright/test").Page, email: string) {
-  await page.getByLabel("Email").fill(email);
-  await page.getByLabel("Password").fill(PASSWORD);
+  await field(page, "Email").fill(email);
+  await field(page, "Password").fill(PASSWORD);
   await page.getByRole("button", { name: "Log in" }).click();
 }
 
@@ -54,8 +55,8 @@ test("logged-out visitors are sent to log in, and never see protected pages", as
 test("sign up, verify the email, and log in", async ({ page }) => {
   const email = newEmail();
   await page.goto("/sign-up");
-  await page.getByLabel("Email").fill(email);
-  await page.getByLabel("Password").fill(PASSWORD);
+  await field(page, "Email").fill(email);
+  await field(page, "Password").fill(PASSWORD);
   await page.getByRole("button", { name: "Sign up" }).click();
   await expect(
     page.getByRole("heading", { name: "Check your email" }),
@@ -64,7 +65,7 @@ test("sign up, verify the email, and log in", async ({ page }) => {
   const token = await linkTo(email, "verify-email");
   await page.goto(`/verify-email#token=${token}`);
   await expect(page).toHaveURL("/verify-email");
-  await page.getByLabel("Password").fill(PASSWORD);
+  await field(page, "Password").fill(PASSWORD);
   await page.getByRole("button", { name: "Confirm and log in" }).click();
   await expect(page).toHaveURL("/dashboard");
   await expect(page.getByText(`Logged in as ${email}.`)).toBeVisible();
@@ -88,13 +89,13 @@ test("wrong passwords are refused", async ({ page, request }) => {
   const email = newEmail();
   await verifiedUser(request, email);
   await page.goto("/login");
-  await page.getByLabel("Email").fill(email);
-  await page.getByLabel("Password").fill("not the password");
+  await field(page, "Email").fill(email);
+  await field(page, "Password").fill("not the password");
   await page.getByRole("button", { name: "Log in" }).click();
   await expect(page.getByRole("main").getByRole("alert")).toHaveText(
     "The email or password is incorrect.",
   );
-  await expect(page.getByLabel("Email")).toHaveValue(email);
+  await expect(field(page, "Email")).toHaveValue(email);
 });
 
 test("log in with 2FA", async ({ page, request }) => {
@@ -109,13 +110,13 @@ test("log in with 2FA", async ({ page, request }) => {
   await expect(page).toHaveURL("/login/two-factor?next=%2Fdashboard");
   expect(page.url()).not.toContain("token");
 
-  await page.getByLabel(/code/i).fill("000000");
+  await field(page, /code/i).fill("000000");
   await page.getByRole("button", { name: "Continue" }).click();
   await expect(
     page.getByText("That code isn't right.", { exact: false }),
   ).toBeVisible();
 
-  await page.getByLabel(/code/i).fill(totp(secret, 1));
+  await field(page, /code/i).fill(totp(secret, 1));
   await page.getByRole("button", { name: "Continue" }).click();
   await expect(page).toHaveURL("/dashboard");
   await expect(page.getByText(`Logged in as ${email}.`)).toBeVisible();
@@ -162,22 +163,22 @@ test("reset a forgotten password from the emailed link", async ({
 
   await page.goto("/login");
   await page.getByRole("link", { name: "Forgot your password?" }).click();
-  await page.getByLabel("Email").fill(email);
+  await field(page, "Email").fill(email);
   await page.getByRole("button", { name: "Send reset link" }).click();
   await expect(page.getByRole("status")).toContainText("we've sent it a link");
 
   const token = await linkTo(email, "reset-password");
   await page.goto(`/reset-password#token=${token}`);
   await expect(page).toHaveURL("/reset-password");
-  await page.getByLabel("New password").fill("a brand new fake passphrase");
+  await field(page, "New password").fill("a brand new fake passphrase");
   await page.getByRole("button", { name: "Set new password" }).click();
   await expect(page).toHaveURL("/login?notice=password-reset");
   await expect(page.getByRole("status")).toContainText(
     "Log in with your new password",
   );
 
-  await page.getByLabel("Email").fill(email);
-  await page.getByLabel("Password").fill("a brand new fake passphrase");
+  await field(page, "Email").fill(email);
+  await field(page, "Password").fill("a brand new fake passphrase");
   await page.getByRole("button", { name: "Log in" }).click();
   await expect(page).toHaveURL("/dashboard");
 });

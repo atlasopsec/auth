@@ -1,5 +1,7 @@
+"use client";
+
 // From the auth module's Next.js template (github.com/atlasopsec/auth, templates/nextjs), version 0.1.0.
-import type { ComponentProps } from "react";
+import { useId, type ComponentProps } from "react";
 
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -12,7 +14,8 @@ type FieldProps = ComponentProps<"input"> & {
 
 // Field is a labelled input with its error, linked for screen readers.
 export function Field({ name, label, error, ...props }: FieldProps) {
-  const id = `field-${name}`;
+  // Unique on the page, even with two fields of the same name.
+  const id = useId();
   const errorId = `${id}-error`;
   return (
     <div className="grid gap-2">

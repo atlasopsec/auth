@@ -16,6 +16,7 @@ It's a complete Next.js app so it can be run and tested, but projects **copy par
 | `src/lib/auth/`                            | Cookies, `getSession` and `requireSession`, the server actions, and the safe `next` check                                                                               |
 | `src/components/auth/`                     | The forms. Restyle them freely                                                                                                                                          |
 | `src/app/(auth)/`                          | Log in, 2FA, sign up, forgot and reset password, verify email, confirm an email change, and accept an invitation. The module's emails link to these paths, so keep them |
+| `src/app/account/`                         | The account settings: password, email, sessions, and 2FA                                                                                                                |
 
 The pages use three shadcn/ui-style components from `src/components/ui/` (`Button`, `Input`, `Label`). If your project already has shadcn/ui, use its own.
 

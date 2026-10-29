@@ -29,13 +29,34 @@ export const getSession = cache(async (): Promise<Me | null> => {
   }
 });
 
+// The page where users who must have 2FA set it up.
+export const TWO_FACTOR_SETUP_PATH = "/account/two-factor";
+
+type RequireOptions = {
+  // For the 2FA setup page itself, which users who must set up 2FA are
+  // allowed to see.
+  duringTwoFactorSetup?: boolean;
+};
+
 // requireSession is the real check for protected pages and server actions:
 // proxy.ts only looks for the cookie. Without a session, it redirects to
-// the login page, which comes back to path afterwards.
-export async function requireSession(path: string): Promise<Me> {
+// the login page, which comes back to path afterwards. A user who must set
+// up 2FA is sent to do that first: the Go API refuses everything else for
+// them until they do.
+export async function requireSession(
+  path: string,
+  options: RequireOptions = {},
+): Promise<Me> {
   const session = await getSession();
   if (!session) {
     redirect(loginPath(path));
+  }
+  if (
+    session.two_factor_required &&
+    !session.two_factor_enabled &&
+    !options.duringTwoFactorSetup
+  ) {
+    redirect(TWO_FACTOR_SETUP_PATH);
   }
   return session;
 }
