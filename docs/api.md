@@ -2,7 +2,7 @@
 
 The module's public Go API and the HTTP endpoints it serves.
 
-> **Status: approved.** §1–7 cover build steps 3–5 (built). §8 covers build step 6 (two-factor authentication), approved and being built. Sections marked **(Decision)** were confirmed in review. Later steps (OAuth) add to this but don't change what's here.
+> **Status:** §1–8 cover build steps 3–6 (approved and built). §9 covers build step 7 (OAuth), approved and being built. Sections marked **(Decision)** were confirmed in review. Later steps add to this but don't change what's here.
 
 Once a name below is released, changing or removing it is a breaking change (a new major version), so this is the moment to get it right.
 
@@ -875,3 +875,185 @@ Confirmed in review on 2026-10-28:
 6. **10 wrong codes in 15 minutes pauses challenges for that user,** and emails them.
 7. **The verification link returns a challenge, not a session, when 2FA is on.**
 8. **Finishing a password reset takes a 2FA code (or recovery code) when 2FA is on.** `ResetTwoFactor` is for users who've lost both.
+
+---
+
+## 9. Step 7: sign in with Google, GitHub, and Apple
+
+Step 7 adds OAuth from the [auth standard](https://github.com/jakefrenzel/engineering-standards/blob/main/standards/auth.md) §5 and the [mobile standard](https://github.com/jakefrenzel/engineering-standards/blob/main/standards/mobile.md) §5:
+- **PKCE and `state` always.**
+- **Users are matched by the provider's user ID, never by email.**
+- **Linking by email only when the provider says it's verified.**
+- **Linking and unlinking from settings,** but never removing the last way to log in.
+- **Sign in with Apple** on iOS, which Apple requires when an app offers Google or GitHub.
+
+### Configuration
+
+```go
+auth.Config{
+	// ...everything so far, plus:
+	OAuth: auth.OAuth{
+		Google: &auth.Google{ClientID: "…", ClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET")},
+		GitHub: &auth.GitHub{ClientID: "…", ClientSecret: os.Getenv("GITHUB_CLIENT_SECRET")},
+		Apple: &auth.Apple{
+			ServicesID: "com.example.web",       // web and Android sign-in
+			BundleIDs:  []string{"com.example.app"}, // the iOS app, for native sign-in
+			TeamID:     "…",
+			KeyID:      "…",
+			PrivateKey: os.Getenv("APPLE_PRIVATE_KEY"), // the .p8 key, PEM
+		},
+		// The app's deep link for finishing sign-in on mobile.
+		MobileRedirectURL: "exampleapp://oauth/callback",
+	},
+}
+```
+
+- **A nil provider is turned off,** and its endpoints answer `404`.
+- **Secrets come from Railway variables,** like every other secret. The module builds Apple's client secret, a short-lived JWT signed with the `.p8` key, itself.
+- **Providers redirect to the web app,** at `{AppURL}/oauth/callback` and `{AppURL}/oauth/callback/mobile`, which are registered with each provider. The Go API isn't public, so it can't receive the redirect itself. Step 9's Next.js template provides both pages.
+
+### One flow for web and mobile (Decision)
+
+The Go API runs the whole exchange: it creates `state` and the PKCE verifier, holds the client secrets, swaps the code for tokens, and reads the user's identity. The web app and the mobile app only open a URL and pass back what the provider returns.
+
+```json
+POST /v1/oauth-flows
+{ "provider": "google", "client": "web", "client_challenge": "…" }
+→ 201 { "authorization_url": "https://accounts.google.com/o/oauth2/v2/auth?…", "expires_at": "…" }
+```
+
+1. **The client starts a flow.**
+   - **Web:** Next.js keeps a random `client_verifier` in an `HttpOnly` cookie and sends its SHA-256 as `client_challenge`, then redirects the browser to `authorization_url`.
+   - **Mobile:** the app keeps the verifier in memory and opens the URL in the system browser (`WebBrowser.openAuthSessionAsync`). Never an embedded web view.
+2. **The user signs in at the provider,** which redirects to the callback page with `code` and `state`.
+   - **Web:** the page finishes the flow.
+   - **Mobile:** `/oauth/callback/mobile` passes them on to `MobileRedirectURL`, which reopens the app.
+3. **The client finishes:**
+
+```json
+POST /v1/oauth-flows/complete
+{ "state": "…", "code": "…", "client_verifier": "…" }
+→ 201, the usual login response, or 200 with a 2FA challenge (§8)
+```
+
+- **The secrets stay on the server.** A mobile app can't keep a client secret: anything in the app bundle is public.
+- **This replaces design.md's `GET /v1/oauth/{provider}/start` and `POST .../callback`.** A `GET` that redirects can't work from a private API, and the callback has to land on the web app.
+- **`client_verifier` ties the flow to the device that started it.** PKCE alone doesn't, because the server holds that verifier. Without the client verifier:
+  - another app that registered the same deep-link scheme could catch the redirect, send the code to the API, and get the user's session; and
+  - an attacker could get a victim's browser to finish the attacker's flow and log in as the attacker (login CSRF).
+
+  The client verifier blocks both, because only the device that started the flow has it.
+- **A flow works once, for 10 minutes.** Its PKCE verifier is stored encrypted with `EncryptionKey`.
+- **Apple on the web posts its response** (`response_mode=form_post`) when email is requested. The callback page accepts `POST` as well as `GET`.
+
+### Sign in with Apple on iOS (Decision)
+
+On iOS, the native Apple sheet (`expo-apple-authentication`) is what users and App Review expect. It returns a signed identity token instead of a redirect:
+
+```json
+POST /v1/apple-sign-ins
+{ "identity_token": "eyJ…", "nonce": "…", "client": "mobile" }
+→ 201, the usual login response, or 200 with a 2FA challenge
+```
+
+- **The token is checked against Apple's published keys:** issuer, audience (one of `BundleIDs`), expiry, and the nonce the app generated.
+- **Android and the web use the redirect flow above** with Apple, like any other provider.
+- **Checking signed tokens needs a JWT library.** Google's and Apple's ID tokens from the redirect flow are checked the same way. I'd use `github.com/coreos/go-oidc/v3`, the standard Go OpenID Connect library, rather than write signature checking ourselves. It's the one new dependency besides `golang.org/x/oauth2` (planned in design.md).
+
+### Who gets logged in (Decision)
+
+When a provider confirms who the user is:
+1. **A linked account** (same provider, same provider user ID) → log in as its user.
+2. **Otherwise, the provider must say the email is verified.**
+   - **Google and Apple:** the ID token's `email_verified`.
+   - **GitHub:** the primary email from `/user/emails`, if it's marked verified.
+   - **Not verified:** refused with `403 oauth_email_not_verified` ("Verify your email with Google first"). Nothing is created.
+3. **An existing account with that email:**
+   - **If its email is verified,** the provider is linked to it and the user is logged in. That's the same trust as a password reset link to that inbox.
+   - **If its email isn't verified,** this is §2's pre-hijacking case: someone may have signed up with this address first. Its password, sessions, 2FA, and pending email tokens are deleted. Then the email is marked verified, the provider is linked, and the real owner is logged in. A password reset already takes back such an account the same way.
+4. **No account** → a new user with that email, already verified, with no password. `OnUserCreated` runs, as for any sign-up.
+
+Then, like every other way in:
+- **2FA applies:** a user with 2FA gets a challenge, not a session.
+- **Sessions follow the user's roles:** privileged roles get 12-hour sessions.
+- **Only the email is stored, no names.** The module has never stored names; projects that want one ask for it in their own profile.
+- **Apple's private relay addresses** (`…@privaterelay.appleid.com`) are treated like any other verified email.
+- **The provider's email isn't kept in sync.** The account is matched by provider user ID from then on, so a later email change at the provider changes nothing here.
+
+### Linking and unlinking (Decision)
+
+| Endpoint | Body | Returns |
+|---|---|---|
+| `GET /v1/users/me/oauth-accounts` | | `200 { data: [{ id, provider, email, created_at }] }` |
+| `POST /v1/users/me/oauth-accounts` | `{ provider, client, client_challenge, current_password }` | `201 { authorization_url, expires_at }`. Finished with `POST /v1/oauth-flows/complete`, sent with the session |
+| `DELETE /v1/users/me/oauth-accounts/{id}` | `{ current_password }` | `204`. `409 last_login_method` if it's the only way left to log in |
+
+- **Linking needs the current password, if the account has one.** Linking adds a way in, and it's how someone with a stolen session would make their access last. That's the same rule as other account-security changes.
+- **Accounts without a password** (OAuth only) link and unlink with their session alone. The only other proof they could give is another provider round trip, which adds a lot of flow for little gain. The notices below cover them.
+- **A provider account already linked to another user** returns `409 oauth_account_in_use`. Accounts are never moved silently.
+- **One account per provider per user.**
+- **Linking finishes only with the same user's session,** and that user's flow.
+- **Notices:** the user is emailed when a provider is linked or unlinked, with new `Emails` templates `OAuthLinked` and `OAuthUnlinked`.
+
+### Accounts without a password (Decision)
+
+Setting up or turning off 2FA, changing the password, and linking all need `current_password`. Today an OAuth-only account just gets `current_password: incorrect`, which is confusing.
+
+These endpoints will answer `409 password_not_set` instead, and the app can offer "set a password" through the existing reset flow, which already adds a password to OAuth-only accounts (§6). That's an additive change: a new error code on existing endpoints.
+
+### Database
+
+Migration `00007`:
+
+```
+auth.oauth_accounts   id, user_id, provider, provider_user_id, email,
+                      created_at, updated_at
+                      unique (provider, provider_user_id), unique (user_id, provider)
+auth.oauth_flows      id, state_hash, provider, purpose (login|link), user_id (link only),
+                      client, client_challenge, pkce_verifier_encrypted, nonce,
+                      expires_at, used_at, created_at, updated_at
+```
+
+- **`email` on `oauth_accounts`** is the provider's address when linked, shown in settings ("Google: ada@gmail.com"). It's never used for matching.
+- **Expired flows** are cleared as new ones start, like 2FA challenges.
+
+### New error codes
+
+| Code | Status | When |
+|---|---|---|
+| `oauth_failed` | 401 | The flow is unknown, used, or expired; the client verifier doesn't match; or the provider refused the code or token. Already listed in design.md |
+| `oauth_email_not_verified` | 403 | The provider doesn't vouch for the email, and no account is linked yet |
+| `oauth_account_in_use` | 409 | Linking a provider account that belongs to another user |
+| `last_login_method` | 409 | Unlinking the only way left to log in |
+| `password_not_set` | 409 | An endpoint needs the current password, but the account has none |
+
+### Testing
+
+- **Fake providers:** the providers are `httptest` servers in tests, with their URLs set internally. They're never exported in `Config` and never called over the network.
+- **Signed tokens:** the fakes sign ID tokens with test keys and serve them as JWKS, so signature, audience, nonce, and expiry checks run for real.
+- **Failure cases:**
+  - Wrong or missing client verifier, and a replayed flow.
+  - An unverified provider email, and a provider account belonging to another user.
+  - Taking back an unverified account, and 2FA users getting a challenge.
+
+### PRs
+
+1. Schema, the flow endpoints, Google and GitHub on web and mobile, the matching rules, and 2FA and session rules at the end.
+2. Linking, unlinking, the account list, notices, and `password_not_set`.
+3. Apple: the redirect flow, the client-secret JWT, and native iOS sign-in.
+
+### Decisions
+
+Confirmed in review on 2026-10-29:
+
+1. **One redirect flow for web and mobile, run by the Go API,** with the callback on web app pages and a mobile page that hands off to the app's deep link.
+2. **A client verifier on top of `state` and PKCE,** so only the device that started a flow can finish it.
+3. **Native Sign in with Apple on iOS** through `POST /v1/apple-sign-ins`, with `go-oidc` as a new dependency for checking signed tokens.
+4. **The matching rules:**
+   - Link by provider user ID first.
+   - Link to an existing account only for a provider-verified email.
+   - Take back an unverified local account by wiping its password and sessions.
+   - Refuse unverified provider emails.
+   - Store no names.
+5. **Linking needs the current password when the account has one.** Linking and unlinking send notices, and the last login method can't be removed.
+6. **`409 password_not_set`** for OAuth-only accounts on endpoints that need a password.
