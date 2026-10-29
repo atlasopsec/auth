@@ -48,6 +48,9 @@ type Hooks struct {
 	// undone. Keep it quick, since the transaction stays open while it
 	// runs. It runs for every new user, including OAuth sign-ups (step 7).
 	OnUserCreated func(ctx context.Context, tx pgx.Tx, u User) error
+
+	// Added in step 8: OnEvent, run after each security event is recorded
+	// (§10).
 }
 
 // New validates cfg and returns a ready Auth. It doesn't touch the
@@ -1125,15 +1128,16 @@ auth.auth_events   id, user_id, actor_id, event, ip, user_agent, metadata, creat
 
 | Event | When |
 |---|---|
-| `login_succeeded`, `login_failed` | Password, link, OAuth, and Apple logins; `metadata.method` says which |
+| `login_succeeded`, `login_failed` | Password, link, OAuth, and Apple logins; `metadata.method` says which: `password`, `verification_link`, `two_factor`, `google`, `github`, or `apple`. A login finished with a 2FA code is `two_factor`. Only `password` and `two_factor` can fail |
 | `logout`, `logout_everywhere`, `session_ended` | |
 | `password_changed`, `password_reset` | |
 | `two_factor_enabled`, `two_factor_disabled`, `two_factor_reset`, `recovery_code_used`, `recovery_codes_regenerated` | |
 | `oauth_linked`, `oauth_unlinked` | `metadata.provider` |
 | `email_changed` | Never the addresses themselves |
-| `app_role_changed`, `org_role_changed`, `member_removed`, `two_factor_required_changed` | `actor_id` is who made the change; `metadata` has the organization and roles |
+| `app_role_changed`, `org_role_changed`, `member_added`, `member_removed`, `two_factor_required_changed` | `actor_id` is who made the change; `metadata` has the organization and roles |
 
 - **IDs only:** `user_id` and `actor_id` are IDs. Never passwords, tokens, codes, or email addresses.
+- **Who made a change:** for an invitation, `member_added`'s actor is whoever sent it. Changes made with Go calls (`SetAppRole`, `SetTwoFactorRequired`, `ResetTwoFactor`, `CreateOrganization`) have no actor and no IP, since the module can't know who called it. Admin tooling that needs that should keep its own record.
 - **Failed logins for unknown emails** are recorded with no `user_id`. They're still useful, by IP, for spotting credential stuffing.
 - **Recorded after the fact, best effort:** an event that fails to write is logged as an error, but doesn't fail the action that already happened.
 - **Kept for 1 year,** then deleted by the cleanup job. Projects with other retention needs can copy events out with the hook below.
@@ -1160,7 +1164,7 @@ Expired sessions, email tokens, 2FA challenges, OAuth flows, old rate-limit wind
 
 ### Database
 
-Migration `00008` (PR 1): `auth.rate_limits`, with an `expires_at` column (the window's end) for cleanup, plus the `id`, `created_at`, and `updated_at` every table has. `auth.auth_events` comes with the event log in PR 3, in its own migration, with indexes on `(user_id, created_at)` and `(created_at)`.
+Migration `00008` (PR 1): `auth.rate_limits`, with an `expires_at` column (the window's end) for cleanup, plus the `id`, `created_at`, and `updated_at` every table has. Migration `00010` (PR 3): `auth.auth_events`, with indexes on `(user_id, created_at)` and `(created_at)`. `user_id` and `actor_id` become `NULL` when the user is deleted, so the record of what happened stays.
 
 ### New error codes
 
