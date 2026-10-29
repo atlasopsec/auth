@@ -75,7 +75,7 @@ Users are emailed when they log in from a browser or app and network (IPv4 `/24`
 
 ## Next.js template
 
-[`templates/nextjs`](templates/nextjs/README.md) is the web half: the session cookie, `proxy.ts`, a session helper, and the login, 2FA, and sign-up pages. Projects copy its auth parts into their own Next.js app.
+[`templates/nextjs`](templates/nextjs/README.md) is the web half: the session cookie, `proxy.ts`, a session helper, the login, 2FA, and sign-up pages, and the pages the module's emails link to. Projects copy its auth parts into their own Next.js app.
 
 ## Example
 

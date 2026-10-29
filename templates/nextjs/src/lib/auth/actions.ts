@@ -10,20 +10,24 @@ import {
   loginOrChallengeSchema,
   loginSchema,
   signUpSchema,
-  type Login,
 } from "@/lib/api/schemas";
 import {
   SESSION_COOKIE,
   TWO_FACTOR_COOKIE,
   clearedCookie,
-  cookieOptions,
 } from "@/lib/auth/cookies";
 import {
   SOMETHING_WENT_WRONG,
   stateFromError,
   type FormState,
 } from "@/lib/auth/form-state";
-import { DEFAULT_AFTER_LOGIN, safeNext } from "@/lib/auth/safe-next";
+import {
+  afterLogin,
+  fieldErrors,
+  finishLogin,
+  startSession,
+} from "@/lib/auth/login";
+import { safeNext } from "@/lib/auth/safe-next";
 import { getSessionToken } from "@/lib/auth/session";
 
 // Every action here re-checks its input: anyone can post anything to a
@@ -37,25 +41,6 @@ const credentialsSchema = z.object({
 const twoFactorSchema = z.object({
   code: z.string().trim().min(1, "Enter the code from your authenticator app."),
 });
-
-function fieldErrors(error: z.ZodError): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const issue of error.issues) {
-    const field = String(issue.path[0] ?? "");
-    out[field] ??= issue.message;
-  }
-  return out;
-}
-
-async function startSession(login: Login): Promise<void> {
-  (await cookies()).set(
-    SESSION_COOKIE,
-    login.token,
-    // Until the latest the session can last: it's extended each time it's
-    // used, and the Go API ends it sooner if it sits unused.
-    cookieOptions(login.absolute_expires_at),
-  );
-}
 
 export async function logIn(
   _prev: FormState,
@@ -81,17 +66,7 @@ export async function logIn(
     return stateFromError(e, values);
   }
 
-  if ("two_factor_required" in result) {
-    (await cookies()).set(
-      TWO_FACTOR_COOKIE,
-      result.challenge_token,
-      cookieOptions(result.expires_at),
-    );
-    const query = next ? `?next=${encodeURIComponent(next)}` : "";
-    redirect(`/login/two-factor${query}`);
-  }
-  await startSession(result);
-  redirect(next ?? DEFAULT_AFTER_LOGIN);
+  return finishLogin(result, next ?? (await afterLogin()));
 }
 
 export async function verifyTwoFactor(
@@ -128,7 +103,7 @@ export async function verifyTwoFactor(
 
   store.set(TWO_FACTOR_COOKIE, "", clearedCookie);
   await startSession(login);
-  redirect(safeNext(formData.get("next")) ?? DEFAULT_AFTER_LOGIN);
+  redirect(safeNext(formData.get("next")) ?? (await afterLogin()));
 }
 
 export async function signUp(
@@ -158,7 +133,7 @@ export async function signUp(
     redirect("/sign-up/check-email");
   }
   await startSession(result);
-  redirect(DEFAULT_AFTER_LOGIN);
+  redirect(await afterLogin());
 }
 
 // logOut ends the session in the Go API, then clears the cookie. The auth

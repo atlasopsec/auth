@@ -51,7 +51,7 @@ test("logged-out visitors are sent to log in, and never see protected pages", as
   expect(await html.text()).not.toContain("Logged in as");
 });
 
-test("sign up, verify the email, and log in", async ({ page, request }) => {
+test("sign up, verify the email, and log in", async ({ page }) => {
   const email = newEmail();
   await page.goto("/sign-up");
   await page.getByLabel("Email").fill(email);
@@ -61,19 +61,11 @@ test("sign up, verify the email, and log in", async ({ page, request }) => {
     page.getByRole("heading", { name: "Check your email" }),
   ).toBeVisible();
 
-  // The verification page comes in the next PR; until then, verify through
-  // the Go API.
   const token = await linkTo(email, "verify-email");
-  const verified = await request.post(
-    `${API_URL}/v1/email-verifications/confirm`,
-    {
-      data: { token, password: PASSWORD, client: "web" },
-    },
-  );
-  expect(verified.status()).toBe(201);
-
-  await page.goto("/dashboard");
-  await logIn(page, email);
+  await page.goto(`/verify-email#token=${token}`);
+  await expect(page).toHaveURL("/verify-email");
+  await page.getByLabel("Password").fill(PASSWORD);
+  await page.getByRole("button", { name: "Confirm and log in" }).click();
   await expect(page).toHaveURL("/dashboard");
   await expect(page.getByText(`Logged in as ${email}.`)).toBeVisible();
 
@@ -159,4 +151,85 @@ test("log out ends the session, so the old cookie stops working", async ({
   await context.addCookies([cookie]);
   await page.goto("/dashboard");
   await expect(page).toHaveURL("/login?next=%2Fdashboard");
+});
+
+test("reset a forgotten password from the emailed link", async ({
+  page,
+  request,
+}) => {
+  const email = newEmail();
+  await verifiedUser(request, email);
+
+  await page.goto("/login");
+  await page.getByRole("link", { name: "Forgot your password?" }).click();
+  await page.getByLabel("Email").fill(email);
+  await page.getByRole("button", { name: "Send reset link" }).click();
+  await expect(page.getByRole("status")).toContainText("we've sent it a link");
+
+  const token = await linkTo(email, "reset-password");
+  await page.goto(`/reset-password#token=${token}`);
+  await expect(page).toHaveURL("/reset-password");
+  await page.getByLabel("New password").fill("a brand new fake passphrase");
+  await page.getByRole("button", { name: "Set new password" }).click();
+  await expect(page).toHaveURL("/login?notice=password-reset");
+  await expect(page.getByRole("status")).toContainText(
+    "Log in with your new password",
+  );
+
+  await page.getByLabel("Email").fill(email);
+  await page.getByLabel("Password").fill("a brand new fake passphrase");
+  await page.getByRole("button", { name: "Log in" }).click();
+  await expect(page).toHaveURL("/dashboard");
+});
+
+test("confirm an email change from the emailed link", async ({
+  page,
+  request,
+}) => {
+  const email = newEmail();
+  const newAddress = newEmail();
+  const token = await verifiedUser(request, email);
+  const requested = await request.post(`${API_URL}/v1/email-changes`, {
+    data: { email: newAddress, current_password: PASSWORD },
+    headers: { Authorization: `Bearer ${token}`, "X-Forwarded-For": newIP() },
+  });
+  expect(requested.status()).toBe(202);
+
+  const link = await linkTo(newAddress, "confirm-email-change");
+  await page.goto(`/confirm-email-change#token=${link}`);
+  await page.getByRole("button", { name: "Confirm new email" }).click();
+  await expect(page).toHaveURL("/login?notice=email-changed");
+
+  await logIn(page, newAddress);
+  await expect(page.getByText(`Logged in as ${newAddress}.`)).toBeVisible();
+});
+
+test("accept an invitation while logged out", async ({ page, request }) => {
+  const owner = await verifiedUser(request, newEmail());
+  const invitee = newEmail();
+  await verifiedUser(request, invitee);
+  const auth = { Authorization: `Bearer ${owner}`, "X-Forwarded-For": newIP() };
+  const org = await request.post(`${API_URL}/v1/organizations`, {
+    data: { name: "Acme" },
+    headers: auth,
+  });
+  expect(org.status()).toBe(201);
+  const invited = await request.post(
+    `${API_URL}/v1/organizations/${(await org.json()).id}/invitations`,
+    { data: { email: invitee, role: "member" }, headers: auth },
+  );
+  expect(invited.status()).toBe(201);
+
+  const token = await linkTo(invitee, "accept-invitation");
+  await page.goto(`/accept-invitation#token=${token}`);
+  await expect(page).toHaveURL("/accept-invitation");
+  await page.getByRole("link", { name: "Log in" }).first().click();
+  await logIn(page, invitee);
+
+  // Back to the invitation, which was kept in a cookie meanwhile.
+  await expect(page).toHaveURL("/accept-invitation");
+  await page.getByRole("button", { name: "Join the organization" }).click();
+  await expect(page.getByRole("status")).toHaveText("You've joined Acme.");
+  const names = (await page.context().cookies()).map((c) => c.name);
+  expect(names).not.toContain("__Host-invitation");
 });

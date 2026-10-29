@@ -7,6 +7,10 @@ export const SESSION_COOKIE = "__Host-session";
 // stays out of the address bar and the page.
 export const TWO_FACTOR_COOKIE = "__Host-two-factor";
 
+// Holds an invitation's token while the user logs in or signs up, so it
+// survives the trip without going into a URL.
+export const INVITATION_COOKIE = "__Host-invitation";
+
 export type CookieOptions = {
   httpOnly: true;
   secure: true;

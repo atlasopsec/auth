@@ -8,14 +8,14 @@ It's a complete Next.js app so it can be run and tested, but projects **copy par
 
 ## What to copy
 
-| Path                                       | What it is                                                                                                       |
-| ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
-| `src/proxy.ts`                             | Sends logged-out visitors to `/login` before a protected page renders. Add your protected paths to its `matcher` |
-| `src/lib/env.ts`, `src/instrumentation.ts` | The settings below, checked when the server starts                                                               |
-| `src/lib/api/`                             | The Go API client. It forwards the browser's IP and user agent, and checks responses with Zod                    |
-| `src/lib/auth/`                            | Cookies, `getSession` and `requireSession`, the server actions, and the safe `next` check                        |
-| `src/components/auth/`                     | The forms. Restyle them freely                                                                                   |
-| `src/app/(auth)/`                          | Log in, 2FA, and sign up                                                                                         |
+| Path                                       | What it is                                                                                                                                                              |
+| ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/proxy.ts`                             | Sends logged-out visitors to `/login` before a protected page renders. Add your protected paths to its `matcher`                                                        |
+| `src/lib/env.ts`, `src/instrumentation.ts` | The settings below, checked when the server starts                                                                                                                      |
+| `src/lib/api/`                             | The Go API client. It forwards the browser's IP and user agent, and checks responses with Zod                                                                           |
+| `src/lib/auth/`                            | Cookies, `getSession` and `requireSession`, the server actions, and the safe `next` check                                                                               |
+| `src/components/auth/`                     | The forms. Restyle them freely                                                                                                                                          |
+| `src/app/(auth)/`                          | Log in, 2FA, sign up, forgot and reset password, verify email, confirm an email change, and accept an invitation. The module's emails link to these paths, so keep them |
 
 The pages use three shadcn/ui-style components from `src/components/ui/` (`Button`, `Input`, `Label`). If your project already has shadcn/ui, use its own.
 

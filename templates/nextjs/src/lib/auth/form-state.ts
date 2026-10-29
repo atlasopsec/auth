@@ -8,6 +8,8 @@ export type FormState = {
   fieldErrors?: Record<string, string>;
   // What was typed, so a failed submit doesn't clear it. Never passwords.
   values?: Record<string, string>;
+  // The action succeeded, for forms that stay on the page.
+  done?: boolean;
 };
 
 export const SOMETHING_WENT_WRONG = "Something went wrong. Please try again.";
