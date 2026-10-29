@@ -53,6 +53,9 @@ func (a *Auth) requestPasswordReset(w http.ResponseWriter, r *http.Request) {
 		writeValidationFailed(w, r, []httpapi.FieldError{fe})
 		return
 	}
+	if !a.allowEmailTo(w, r, req.Email) {
+		return
+	}
 
 	row, err := a.q.GetUserByEmail(r.Context(), req.Email)
 	switch {
@@ -134,7 +137,7 @@ func (a *Auth) confirmPasswordReset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res, err := a.resetPassword(ctx, t.UserID, t.ID, hash, twoFactor, req.Code)
+	res, err := a.resetPassword(ctx, t.UserID, t.ID, hash, twoFactor, req.Code, a.clientIP(r))
 	if errors.Is(err, emailtoken.ErrInvalid) {
 		// A concurrent request used the token first.
 		writeTokenInvalid(w, r)
@@ -167,7 +170,7 @@ type resetResult struct {
 // token, sets the password, verifies the email, and ends every session and
 // 2FA challenge, all or nothing. A wrong code changes nothing but the
 // failure counts, and is reported in the result.
-func (a *Auth) resetPassword(ctx context.Context, userID, tokenID uuid.UUID, hash string, twoFactor bool, code string) (resetResult, error) {
+func (a *Auth) resetPassword(ctx context.Context, userID, tokenID uuid.UUID, hash string, twoFactor bool, code, ip string) (resetResult, error) {
 	var res resetResult
 	err := a.withTx(ctx, func(tx pgx.Tx) error {
 		q := db.New(tx)
@@ -177,7 +180,7 @@ func (a *Auth) resetPassword(ctx context.Context, userID, tokenID uuid.UUID, has
 		}
 		res.check.ok = !twoFactor
 		if twoFactor {
-			if res.check, err = a.checkLoginCode(ctx, q, userID, code); err != nil {
+			if res.check, err = a.checkLoginCode(ctx, q, userID, code, ip); err != nil {
 				return err
 			}
 			if !res.check.ok {

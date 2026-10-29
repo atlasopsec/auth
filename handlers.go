@@ -28,14 +28,14 @@ const maxEmailLength = 254
 // already owns makes mux panic at startup, which surfaces the clash
 // immediately.
 func (a *Auth) Register(mux *http.ServeMux) {
-	mux.Handle("POST /v1/users", endpoint(http.HandlerFunc(a.signUp)))
-	mux.Handle("POST /v1/sessions", endpoint(http.HandlerFunc(a.logIn)))
-	mux.Handle("POST /v1/email-verifications", endpoint(http.HandlerFunc(a.requestVerification)))
-	mux.Handle("POST /v1/email-verifications/confirm", endpoint(http.HandlerFunc(a.confirmVerification)))
-	mux.Handle("POST /v1/password-resets", endpoint(http.HandlerFunc(a.requestPasswordReset)))
-	mux.Handle("POST /v1/password-resets/confirm", endpoint(http.HandlerFunc(a.confirmPasswordReset)))
+	mux.Handle("POST /v1/users", endpoint(a.limitIP(limitSignUp, http.HandlerFunc(a.signUp))))
+	mux.Handle("POST /v1/sessions", endpoint(a.limitIP(limitLogin, http.HandlerFunc(a.logIn))))
+	mux.Handle("POST /v1/email-verifications", endpoint(a.limitIP(limitEmailIP, http.HandlerFunc(a.requestVerification))))
+	mux.Handle("POST /v1/email-verifications/confirm", endpoint(a.limitIP(limitLogin, http.HandlerFunc(a.confirmVerification))))
+	mux.Handle("POST /v1/password-resets", endpoint(a.limitIP(limitEmailIP, http.HandlerFunc(a.requestPasswordReset))))
+	mux.Handle("POST /v1/password-resets/confirm", endpoint(a.limitIP(limitLogin, http.HandlerFunc(a.confirmPasswordReset))))
 	mux.Handle("POST /v1/users/me/password", endpoint(a.Authenticated(http.HandlerFunc(a.changePassword))))
-	mux.Handle("POST /v1/email-changes", endpoint(a.Authenticated(http.HandlerFunc(a.requestEmailChange))))
+	mux.Handle("POST /v1/email-changes", endpoint(a.Authenticated(a.limitIP(limitEmailIP, http.HandlerFunc(a.requestEmailChange)))))
 	mux.Handle("POST /v1/email-changes/confirm", endpoint(http.HandlerFunc(a.confirmEmailChange)))
 	a.registerOrganizations(mux)
 	a.registerTwoFactor(mux)
@@ -88,6 +88,11 @@ func (a *Auth) signUp(w http.ResponseWriter, r *http.Request) {
 	}
 	if details != nil {
 		writeValidationFailed(w, r, details)
+		return
+	}
+	// Sign-up emails the address: a verification link, or a notice if it
+	// has an account.
+	if !a.allowEmailTo(w, r, req.Email) {
 		return
 	}
 	if fe, ok := a.checkBreached(r, "password", req.Password); !ok {

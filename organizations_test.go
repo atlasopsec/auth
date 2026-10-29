@@ -37,7 +37,13 @@ func setupOrgs(t *testing.T, cfg Config) orgFixture {
 // verifiedUser signs up a user whose email is verified.
 func (f orgFixture) user(t *testing.T, email string) loginJSON {
 	t.Helper()
-	l := f.signUp(t, email)
+	// From its own address, like a separate person, so tests that need
+	// many users stay under the per-IP sign-up limit.
+	res := f.do(t, http.MethodPost, "/v1/users", credentials(email, testPassword, "web"), fromIP(nextTestIP()))
+	var l loginJSON
+	if res.status != http.StatusCreated || json.Unmarshal(res.body, &l) != nil {
+		t.Fatalf("sign up: status %d, body %s", res.status, res.body)
+	}
 	if _, err := f.pool.Exec(context.Background(), `UPDATE auth.users SET email_verified_at = now() WHERE id = $1`, l.User.ID); err != nil {
 		t.Fatal(err)
 	}

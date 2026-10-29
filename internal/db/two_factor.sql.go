@@ -102,6 +102,24 @@ func (q *Queries) CreateTwoFactorFailure(ctx context.Context, arg CreateTwoFacto
 	return err
 }
 
+const deleteEndedTwoFactorChallenges = `-- name: DeleteEndedTwoFactorChallenges :execrows
+DELETE FROM auth.two_factor_challenges
+WHERE used_at IS NOT NULL OR expires_at <= $1 OR failed_attempts >= $2
+`
+
+type DeleteEndedTwoFactorChallengesParams struct {
+	Now               time.Time
+	MaxFailedAttempts int32
+}
+
+func (q *Queries) DeleteEndedTwoFactorChallenges(ctx context.Context, arg DeleteEndedTwoFactorChallengesParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteEndedTwoFactorChallenges, arg.Now, arg.MaxFailedAttempts)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteOldTwoFactorFailures = `-- name: DeleteOldTwoFactorFailures :exec
 DELETE FROM auth.two_factor_failures WHERE user_id = $1 AND created_at <= $2
 `
@@ -159,6 +177,18 @@ DELETE FROM auth.two_factor_challenges WHERE user_id = $1
 func (q *Queries) DeleteTwoFactorChallenges(ctx context.Context, userID uuid.UUID) error {
 	_, err := q.db.Exec(ctx, deleteTwoFactorChallenges, userID)
 	return err
+}
+
+const deleteTwoFactorFailuresBefore = `-- name: DeleteTwoFactorFailuresBefore :execrows
+DELETE FROM auth.two_factor_failures WHERE created_at <= $1
+`
+
+func (q *Queries) DeleteTwoFactorFailuresBefore(ctx context.Context, before time.Time) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteTwoFactorFailuresBefore, before)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const getTOTPSecret = `-- name: GetTOTPSecret :one

@@ -57,6 +57,9 @@ func (a *Auth) requestEmailChange(w http.ResponseWriter, r *http.Request) {
 		writeEmailNotVerified(w, r)
 		return
 	}
+	if !a.allowEmailTo(w, r, req.Email) {
+		return
+	}
 
 	ctx := r.Context()
 	if !a.passwordChecked(w, r, c.user.ID, req.CurrentPassword) {

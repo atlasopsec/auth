@@ -120,13 +120,16 @@ func (q *Queries) DeleteOAuthAccount(ctx context.Context, arg DeleteOAuthAccount
 	return provider, err
 }
 
-const deleteSpentOAuthFlows = `-- name: DeleteSpentOAuthFlows :exec
+const deleteSpentOAuthFlows = `-- name: DeleteSpentOAuthFlows :execrows
 DELETE FROM auth.oauth_flows WHERE used_at IS NOT NULL OR expires_at <= $1
 `
 
-func (q *Queries) DeleteSpentOAuthFlows(ctx context.Context, now time.Time) error {
-	_, err := q.db.Exec(ctx, deleteSpentOAuthFlows, now)
-	return err
+func (q *Queries) DeleteSpentOAuthFlows(ctx context.Context, now time.Time) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteSpentOAuthFlows, now)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const getOAuthAccount = `-- name: GetOAuthAccount :one

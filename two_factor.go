@@ -22,7 +22,7 @@ func (a *Auth) registerTwoFactor(mux *http.ServeMux) {
 	mux.Handle("POST /v1/users/me/two-factor/confirm", endpoint(a.duringSetup(http.HandlerFunc(a.confirmTwoFactor))))
 	mux.Handle("DELETE /v1/users/me/two-factor", endpoint(a.Authenticated(http.HandlerFunc(a.disableTwoFactor))))
 	mux.Handle("POST /v1/users/me/two-factor/recovery-codes", endpoint(a.Authenticated(http.HandlerFunc(a.regenerateRecoveryCodes))))
-	mux.Handle("POST /v1/two-factor-challenges/verify", endpoint(http.HandlerFunc(a.verifyChallenge)))
+	mux.Handle("POST /v1/two-factor-challenges/verify", endpoint(a.limitIP(limitLogin, http.HandlerFunc(a.verifyChallenge))))
 }
 
 // twoFactorStatus reports whether a user has 2FA on, and whether they

@@ -84,9 +84,10 @@ type codeCheck struct {
 // checkLoginCode checks a code entered to log in or to reset a password,
 // where wrong codes count toward the guessing limit. Call it in a
 // transaction. A wrong code is reported in the result rather than as an
-// error, so the caller can commit the count. While the limit is reached it
-// returns a pausedError without checking the code.
-func (a *Auth) checkLoginCode(ctx context.Context, q *db.Queries, userID uuid.UUID, code string) (codeCheck, error) {
+// error, so the caller can commit the count. While the user's limit, or the
+// client IP's (ip, from ratelimit.IP), is reached it returns a pausedError
+// without checking the code.
+func (a *Auth) checkLoginCode(ctx context.Context, q *db.Queries, userID uuid.UUID, code, ip string) (codeCheck, error) {
 	// Taking checkSecondFactor's lock first means concurrent wrong codes are
 	// counted one at a time, so the limit can't be overshot, and the
 	// warning is sent once.
@@ -95,6 +96,13 @@ func (a *Auth) checkLoginCode(ctx context.Context, q *db.Queries, userID uuid.UU
 	}
 	if err := a.checkPaused(ctx, q, userID); err != nil {
 		return codeCheck{}, err
+	}
+	reached, retry, err := a.limiter.Reached(ctx, limitWrongCodes, ip)
+	if err != nil {
+		return codeCheck{}, err
+	}
+	if reached {
+		return codeCheck{}, pausedError{until: a.now().Add(retry)}
 	}
 	usedRecovery, err := a.checkSecondFactor(ctx, q, userID, code)
 	if err == nil {
@@ -114,6 +122,10 @@ func (a *Auth) checkLoginCode(ctx context.Context, q *db.Queries, userID uuid.UU
 	}
 	if err := q.CreateTwoFactorFailure(ctx, db.CreateTwoFactorFailureParams{ID: id, UserID: userID, Now: now}); err != nil {
 		return codeCheck{}, fmt.Errorf("recording 2FA failure: %w", err)
+	}
+	// Counted outside the transaction, so it holds even if that rolls back.
+	if _, _, err := a.limiter.Hit(ctx, limitWrongCodes, ip); err != nil {
+		return codeCheck{}, err
 	}
 	err = a.checkPaused(ctx, q, userID)
 	var paused pausedError
@@ -237,7 +249,7 @@ func (a *Auth) verifyChallenge(w http.ResponseWriter, r *http.Request) {
 		}
 		policy = sessionPolicy(tf)
 
-		if check, err = a.checkLoginCode(ctx, q, ch.UserID, req.Code); err != nil {
+		if check, err = a.checkLoginCode(ctx, q, ch.UserID, req.Code, a.clientIP(r)); err != nil {
 			return err
 		}
 		if !check.ok {

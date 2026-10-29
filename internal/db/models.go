@@ -79,6 +79,16 @@ type AuthOrganization struct {
 	UpdatedAt time.Time
 }
 
+type AuthRateLimit struct {
+	ID          uuid.UUID
+	Key         string
+	WindowStart time.Time
+	ExpiresAt   time.Time
+	Count       int32
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
 type AuthRecoveryCode struct {
 	ID        uuid.UUID
 	UserID    uuid.UUID

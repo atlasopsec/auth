@@ -35,6 +35,9 @@ func (a *Auth) requestVerification(w http.ResponseWriter, r *http.Request) {
 		writeValidationFailed(w, r, []httpapi.FieldError{fe})
 		return
 	}
+	if !a.allowEmailTo(w, r, req.Email) {
+		return
+	}
 
 	row, err := a.q.GetUserByEmail(r.Context(), req.Email)
 	switch {
