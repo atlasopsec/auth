@@ -73,6 +73,10 @@ Logins, failed logins, logouts, and every password, 2FA, OAuth, email, and role 
 
 Users are emailed when they log in from a browser or app and network (IPv4 `/24` or IPv6 `/48`) that hasn't logged in to their account in the last 90 days. Override the email with `Emails.NewDeviceLogin`, or turn it off with `Config.DisableNewDeviceEmails`.
 
+## Example
+
+[`examples/api`](examples/api/main.go) is a small Go API built on the module, showing how to wire `auth.New`. It serves the Next.js template in development and tests. It prints emails instead of sending them, so never deploy it.
+
 ## Design
 
 How the module is structured and how projects use it: [docs/design.md](docs/design.md). The public Go API and HTTP endpoints: [docs/api.md](docs/api.md).

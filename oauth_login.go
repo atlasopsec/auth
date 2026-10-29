@@ -278,7 +278,7 @@ func (a *Auth) writeOAuthLogin(w http.ResponseWriter, r *http.Request, provider 
 	}
 	a.logEvent(r, "auth: user logged in with "+provider, res.user.ID)
 	a.event(r, EventLoginSucceeded, &res.user.ID, nil, map[string]string{"method": provider})
-	httpapi.WriteJSON(w, r, http.StatusCreated, loginResponse{User: toUserJSON(userFromRow(res.user)), Token: res.token, ExpiresAt: timestamp(res.expires)})
+	httpapi.WriteJSON(w, r, http.StatusCreated, newLoginResponse(toUserJSON(userFromRow(res.user)), res.token, res.session))
 }
 
 // useOAuthFlow spends the flow named by state, if it's usable and
@@ -325,7 +325,9 @@ type oauthResult struct {
 	// token is the session token, or challenge the 2FA challenge token.
 	token     string
 	challenge string
-	expires   time.Time
+	// expires is when the challenge expires; session is the new session.
+	expires time.Time
+	session session.Session
 	// created, linked, and tookBack say what happened to the account.
 	created  bool
 	linked   bool
@@ -381,9 +383,7 @@ func (a *Auth) oauthLogIn(r *http.Request, provider string, id oauth.Identity, c
 			return err
 		}
 		ip, ua := httpapi.Client(r, a.trusted)
-		var s session.Session
-		res.token, s, err = session.NewManager(tx, a.now).Create(ctx, userID, session.Meta{Client: client, IP: ip, UserAgent: ua}, sessionPolicy(tf))
-		res.expires = s.ExpiresAt
+		res.token, res.session, err = session.NewManager(tx, a.now).Create(ctx, userID, session.Meta{Client: client, IP: ip, UserAgent: ua}, sessionPolicy(tf))
 		return err
 	})
 	if err != nil {

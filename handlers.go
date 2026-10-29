@@ -66,6 +66,13 @@ type loginResponse struct {
 	User      userJSON  `json:"user"`
 	Token     string    `json:"token"`
 	ExpiresAt timestamp `json:"expires_at"`
+	// AbsoluteExpiresAt is the latest the session can last, however often
+	// it's used. The web app sets its cookie to last until then.
+	AbsoluteExpiresAt timestamp `json:"absolute_expires_at"`
+}
+
+func newLoginResponse(u userJSON, tok string, s session.Session) loginResponse {
+	return loginResponse{User: u, Token: tok, ExpiresAt: timestamp(s.ExpiresAt), AbsoluteExpiresAt: timestamp(s.AbsoluteExpiresAt)}
 }
 
 func (a *Auth) signUp(w http.ResponseWriter, r *http.Request) {
@@ -131,11 +138,7 @@ func (a *Auth) signUp(w http.ResponseWriter, r *http.Request) {
 		writeVerificationRequired(w, r)
 		return
 	}
-	httpapi.WriteJSON(w, r, http.StatusCreated, loginResponse{
-		User:      toUserJSON(created.user),
-		Token:     created.sessionToken,
-		ExpiresAt: timestamp(created.session.ExpiresAt),
-	})
+	httpapi.WriteJSON(w, r, http.StatusCreated, newLoginResponse(toUserJSON(created.user), created.sessionToken, created.session))
 }
 
 func writeVerificationRequired(w http.ResponseWriter, r *http.Request) {
@@ -328,7 +331,7 @@ func (a *Auth) logIn(w http.ResponseWriter, r *http.Request) {
 	}
 	a.logEvent(r, "auth: user logged in", row.ID)
 	a.event(r, EventLoginSucceeded, &row.ID, nil, map[string]string{"method": "password"})
-	httpapi.WriteJSON(w, r, http.StatusCreated, loginResponse{User: toUserJSON(userFromRow(row)), Token: tok, ExpiresAt: timestamp(s.ExpiresAt)})
+	httpapi.WriteJSON(w, r, http.StatusCreated, newLoginResponse(toUserJSON(userFromRow(row)), tok, s))
 }
 
 // wrongPassword counts a failed login and answers it. userID is nil for an

@@ -288,7 +288,7 @@ func (a *Auth) verifyChallenge(w http.ResponseWriter, r *http.Request) {
 	}
 	a.logEvent(r, "auth: user logged in", user.ID)
 	a.event(r, EventLoginSucceeded, &user.ID, nil, map[string]string{"method": "two_factor"})
-	httpapi.WriteJSON(w, r, http.StatusCreated, loginResponse{User: toUserJSON(userFromRow(user)), Token: tok, ExpiresAt: timestamp(s.ExpiresAt)})
+	httpapi.WriteJSON(w, r, http.StatusCreated, newLoginResponse(toUserJSON(userFromRow(user)), tok, s))
 }
 
 // wrongLoginCode answers a wrong code entered to log in or reset a

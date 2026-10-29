@@ -2,7 +2,7 @@
 
 The module's public Go API and the HTTP endpoints it serves.
 
-> **Status:** §1–9 cover build steps 3–7 (approved and built). §10 covers build step 8 (rate limiting and the event log), approved and built. §11 covers build step 9 (the Next.js template), proposed for review. Sections marked **(Decision)** were confirmed in review. Later steps add to this but don't change what's here.
+> **Status:** §1–9 cover build steps 3–7 (approved and built). §10 covers build step 8 (rate limiting and the event log), approved and built. §11 covers build step 9 (the Next.js template), approved and being built. Sections marked **(Decision)** were confirmed in review. Later steps add to this but don't change what's here.
 
 Once a name below is released, changing or removing it is a breaking change (a new major version), so this is the moment to get it right.
 
@@ -171,7 +171,8 @@ For projects that choose a faster first experience over these protections. Sign-
 {
   "user": { "id": "0192d4e1-…", "email": "ada@example.com", "email_verified": false, "created_at": "2026-10-28T13:00:00Z" },
   "token": "q3J…",
-  "expires_at": "2026-11-27T13:00:00Z"
+  "expires_at": "2026-11-27T13:00:00Z",
+  "absolute_expires_at": "2027-01-26T13:00:00Z"
 }
 ```
 
@@ -199,8 +200,10 @@ With `AllowUnverifiedLogin`, an attacker can sign up with someone else's email a
 
 ```json
 201 Created
-{ "user": { … }, "token": "q3J…", "expires_at": "2026-11-27T13:00:00Z" }
+{ "user": { … }, "token": "q3J…", "expires_at": "2026-11-27T13:00:00Z", "absolute_expires_at": "2027-01-26T13:00:00Z" }
 ```
+
+- `expires_at` is when the session ends if it isn't used; `absolute_expires_at` is the latest it can last however often it's used (90 days, or 12 hours for privileged users). The second was added in step 9, for the web app's cookie (§11). Every login response has both: sign-up with `AllowUnverifiedLogin`, verification links, 2FA, and OAuth.
 
 | Error | Status | When |
 |---|---|---|
@@ -1311,7 +1314,7 @@ None are `NEXT_PUBLIC_`, and none are secrets. They go in `.env.example` with fa
 
 ### Decisions
 
-Proposed, for review:
+Confirmed in review on 2026-10-29:
 
 1. **A runnable template app** in `templates/nextjs/`, of which projects copy the auth parts, versioned with the module, plus an `examples/api` Go server for development and tests.
 2. **The pages in the table above,** plain and unbranded, including `/account`, and no Apple button.

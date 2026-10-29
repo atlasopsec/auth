@@ -1249,7 +1249,7 @@ components:
 
     LoginResponse:
       type: object
-      required: [user, token, expires_at]
+      required: [user, token, expires_at, absolute_expires_at]
       properties:
         user: { $ref: "#/components/schemas/User" }
         token:
@@ -1263,6 +1263,13 @@ components:
             forward, except for users with a privileged role
             (`Config.TwoFactorRoles`), whose sessions end 12 hours after
             login.
+        absolute_expires_at:
+          type: string
+          format: date-time
+          description: >
+            The latest the session can last, however often it's used: 90
+            days after login, or 12 hours for privileged users. The web
+            app's session cookie lasts until then.
 
     OAuthAccount:
       type: object
