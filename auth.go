@@ -92,12 +92,14 @@ type Config struct {
 	// gives them one. Leave nil if the app doesn't need them.
 	AppRoles rbac.Roles
 
-	// TwoFactorRoles are the privileged roles: list every org or app role
-	// with admin or elevated permissions, e.g. "owner", "admin", and
-	// "support". A user with one of them, in any organization, must have
-	// 2FA, and their sessions last at most 12 hours. Until they set 2FA up,
-	// they can only set it up, read GET /v1/users/me, and log out. Each
-	// name must be defined in OrgRoles or AppRoles.
+	// TwoFactorRoles are the privileged roles (the auth standard §6): staff
+	// roles such as "support" always, and "owner" and "admin" when
+	// organizations are shared by teams. Apps where each user gets their
+	// own workspace may leave owner and admin out. A user with one of them,
+	// in any organization, must have 2FA, and their sessions last at most
+	// 12 hours. Until they set 2FA up, they can only set it up, read
+	// GET /v1/users/me, and log out. Each name must be defined in OrgRoles
+	// or AppRoles.
 	TwoFactorRoles []string
 }
 

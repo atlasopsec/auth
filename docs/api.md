@@ -788,6 +788,7 @@ a.SetTwoFactorRequired(ctx, userID, true) // an individual user (the standard)
 - **Privileged sessions last 12 hours** (the standard, §4). That's enforced on every request, so promoting someone takes effect on their next request, not their next login.
 - **"Privileged" means holding one of `TwoFactorRoles`.** A user marked with `SetTwoFactorRequired` must have 2FA but keeps regular sessions, since the standard ties the 12 hours to roles.
 - **`TwoFactorRoles` must name roles defined in `OrgRoles` or `AppRoles`,** so a typo fails at startup instead of leaving a role unprotected.
+- **Which roles to list** follows the auth standard §6: staff roles such as `support` always, and `owner` and `admin` when organizations are shared by teams. In apps where each user gets their own workspace, everyone who signs up is an owner, so listing `owner` would force 2FA and 12-hour sessions on every customer; those apps may leave it out. The module doesn't add `owner` by itself for that reason.
 
 ### Guessing codes, until step 8 (Decision)
 
