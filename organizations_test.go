@@ -168,17 +168,17 @@ func TestDisableOrganizationCreation(t *testing.T) {
 	}
 
 	// The app creates organizations itself.
-	o, err := f.auth.CreateOrganization(context.Background(), " Client Co ", u.User.ID)
+	o, err := f.auth.CreateOrganization(context.Background(), " Client Co ", u.User.ID, Actor{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if o.Name != "Client Co" || f.roleOf(t, o.ID, u.User.ID) != OwnerRole {
 		t.Errorf("CreateOrganization() = %+v; want the trimmed name, with the user as owner", o)
 	}
-	if _, err := f.auth.CreateOrganization(context.Background(), "", u.User.ID); err == nil {
+	if _, err := f.auth.CreateOrganization(context.Background(), "", u.User.ID, Actor{}); err == nil {
 		t.Error("CreateOrganization() with a blank name: error = nil")
 	}
-	if _, err := f.auth.CreateOrganization(context.Background(), "Ghost", uuid.Must(uuid.NewV7())); err == nil {
+	if _, err := f.auth.CreateOrganization(context.Background(), "Ghost", uuid.Must(uuid.NewV7()), Actor{}); err == nil {
 		t.Error("CreateOrganization() for a nonexistent user: error = nil")
 	}
 }
@@ -190,7 +190,7 @@ func TestNoOrganizationEndpointsWithoutOrgRoles(t *testing.T) {
 	if res := f.do(t, http.MethodGet, "/v1/organizations", "", withToken(u.Token)); res.status != http.StatusNotFound {
 		t.Errorf("GET /v1/organizations: status %d, want 404", res.status)
 	}
-	if _, err := f.auth.CreateOrganization(context.Background(), "Acme", u.User.ID); err == nil {
+	if _, err := f.auth.CreateOrganization(context.Background(), "Acme", u.User.ID, Actor{}); err == nil {
 		t.Error("CreateOrganization() without OrgRoles: error = nil")
 	}
 }

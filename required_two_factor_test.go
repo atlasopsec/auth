@@ -72,10 +72,10 @@ func TestRequiredTwoFactorAllowsOnlySetup(t *testing.T) {
 	l := f.signUp(t, testEmail)
 	org := f.newOrg(t)
 	f.addMember(t, org, l.User.ID, "member")
-	if err := f.auth.SetAppRole(context.Background(), l.User.ID, "auditor"); err != nil {
+	if err := f.auth.SetAppRole(context.Background(), l.User.ID, "auditor", Actor{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.auth.SetTwoFactorRequired(context.Background(), l.User.ID, true); err != nil {
+	if err := f.auth.SetTwoFactorRequired(context.Background(), l.User.ID, true, Actor{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -120,17 +120,17 @@ func TestSetTwoFactorRequired(t *testing.T) {
 	if m := f.me(t, l.Token); m.TwoFactorRequired {
 		t.Fatal("required before SetTwoFactorRequired")
 	}
-	if err := f.auth.SetTwoFactorRequired(ctx, l.User.ID, true); err != nil {
+	if err := f.auth.SetTwoFactorRequired(ctx, l.User.ID, true, Actor{}); err != nil {
 		t.Fatal(err)
 	}
 	wantError(t, "required", f.do(t, http.MethodGet, "/v1/profile", "", withToken(l.Token)), 403, "two_factor_setup_required")
-	if err := f.auth.SetTwoFactorRequired(ctx, l.User.ID, false); err != nil {
+	if err := f.auth.SetTwoFactorRequired(ctx, l.User.ID, false, Actor{}); err != nil {
 		t.Fatal(err)
 	}
 	if res := f.do(t, http.MethodGet, "/v1/profile", "", withToken(l.Token)); res.status != http.StatusOK {
 		t.Errorf("no longer required: status %d, body %s", res.status, res.body)
 	}
-	if err := f.auth.SetTwoFactorRequired(ctx, uuid.Must(uuid.NewV7()), true); err == nil {
+	if err := f.auth.SetTwoFactorRequired(ctx, uuid.Must(uuid.NewV7()), true, Actor{}); err == nil {
 		t.Error("unknown user: error = nil, want an error")
 	}
 }
@@ -148,10 +148,10 @@ func TestTwoFactorRolesRequireTwoFactor(t *testing.T) {
 	}{
 		{"member@example.com", func(id uuid.UUID) { f.addMember(t, org, id, "member") }, false},
 		{"viewer@example.com", func(id uuid.UUID) { f.addMember(t, org, id, "viewer") }, false},
-		{"auditor@example.com", func(id uuid.UUID) { _ = f.auth.SetAppRole(ctx, id, "auditor") }, false},
+		{"auditor@example.com", func(id uuid.UUID) { _ = f.auth.SetAppRole(ctx, id, "auditor", Actor{}) }, false},
 		{"admin@example.com", func(id uuid.UUID) { f.addMember(t, org, id, "admin") }, true},
 		{"owner@example.com", func(id uuid.UUID) { f.addMember(t, org, id, OwnerRole) }, true},
-		{"support@example.com", func(id uuid.UUID) { _ = f.auth.SetAppRole(ctx, id, "support") }, true},
+		{"support@example.com", func(id uuid.UUID) { _ = f.auth.SetAppRole(ctx, id, "support", Actor{}) }, true},
 		// An admin anywhere needs 2FA everywhere.
 		{"split@example.com", func(id uuid.UUID) {
 			f.addMember(t, org, id, "viewer")

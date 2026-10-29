@@ -51,11 +51,12 @@ var ErrInvalidOrgName = errors.New("auth: organization name must be 1 to 200 cha
 
 // CreateOrganization creates an organization with ownerID as its owner.
 // It's for apps that create organizations themselves, e.g. when a client
-// signs up, typically with Config.DisableOrganizationCreation set.
-func (a *Auth) CreateOrganization(ctx context.Context, name string, ownerID uuid.UUID) (Organization, error) {
+// signs up, typically with Config.DisableOrganizationCreation set. by is
+// who's creating it, for the security event log.
+func (a *Auth) CreateOrganization(ctx context.Context, name string, ownerID uuid.UUID, by Actor) (Organization, error) {
 	o, err := a.createOrg(ctx, name, ownerID)
 	if err == nil {
-		a.recordEvent(ctx, Event{Type: EventMemberAdded, UserID: &ownerID, Metadata: map[string]string{"organization_id": o.ID.String(), "role": OwnerRole}})
+		a.adminEvent(ctx, by, Event{Type: EventMemberAdded, UserID: &ownerID, Metadata: map[string]string{"organization_id": o.ID.String(), "role": OwnerRole}})
 	}
 	return o, err
 }

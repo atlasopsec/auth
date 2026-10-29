@@ -182,7 +182,7 @@ func TestContextInsideHandlers(t *testing.T) {
 	member := f.signUp(t, "member@example.com")
 	f.addMember(t, org, admin.User.ID, "admin")
 	f.addMember(t, org, member.User.ID, "member")
-	if err := f.auth.SetAppRole(context.Background(), admin.User.ID, "auditor"); err != nil {
+	if err := f.auth.SetAppRole(context.Background(), admin.User.ID, "auditor", Actor{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -219,7 +219,7 @@ func TestRequire(t *testing.T) {
 	nobody := f.signUp(t, "nobody@example.com")
 	retired := f.signUp(t, "retired@example.com")
 	for user, role := range map[uuid.UUID]string{support.User.ID: "support", auditor.User.ID: "auditor"} {
-		if err := f.auth.SetAppRole(ctx, user, role); err != nil {
+		if err := f.auth.SetAppRole(ctx, user, role, Actor{}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -247,7 +247,7 @@ func TestRequire(t *testing.T) {
 	}
 
 	// Removing the role takes effect on the next request.
-	if err := f.auth.SetAppRole(ctx, support.User.ID, ""); err != nil {
+	if err := f.auth.SetAppRole(ctx, support.User.ID, "", Actor{}); err != nil {
 		t.Fatal(err)
 	}
 	if res := ban(support.Token); res.status != http.StatusForbidden {
@@ -261,26 +261,26 @@ func TestSetAppRole(t *testing.T) {
 	ctx := context.Background()
 	u := f.signUp(t, testEmail)
 
-	if err := f.auth.SetAppRole(ctx, u.User.ID, "superuser"); err == nil {
+	if err := f.auth.SetAppRole(ctx, u.User.ID, "superuser", Actor{}); err == nil {
 		t.Error("undefined role: error = nil")
 	}
-	if err := f.auth.SetAppRole(ctx, uuid.Must(uuid.NewV7()), "support"); err == nil {
+	if err := f.auth.SetAppRole(ctx, uuid.Must(uuid.NewV7()), "support", Actor{}); err == nil {
 		t.Error("nonexistent user: error = nil")
 	}
-	if err := f.auth.SetAppRole(ctx, u.User.ID, "auditor"); err != nil {
+	if err := f.auth.SetAppRole(ctx, u.User.ID, "auditor", Actor{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.auth.SetAppRole(ctx, u.User.ID, "support"); err != nil {
+	if err := f.auth.SetAppRole(ctx, u.User.ID, "support", Actor{}); err != nil {
 		t.Fatalf("replacing the role: %v", err)
 	}
 	var role string
 	if err := f.pool.QueryRow(ctx, `SELECT role FROM auth.user_roles WHERE user_id = $1`, u.User.ID).Scan(&role); err != nil || role != "support" {
 		t.Errorf("stored role = %q, err = %v; want support", role, err)
 	}
-	if err := f.auth.SetAppRole(ctx, u.User.ID, ""); err != nil {
+	if err := f.auth.SetAppRole(ctx, u.User.ID, "", Actor{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.auth.SetAppRole(ctx, u.User.ID, ""); err != nil {
+	if err := f.auth.SetAppRole(ctx, u.User.ID, "", Actor{}); err != nil {
 		t.Errorf("removing a role twice: %v", err)
 	}
 }

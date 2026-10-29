@@ -521,7 +521,7 @@ func TestResetTwoFactor(t *testing.T) {
 	f.startSetup(t, grace.Token)
 	ctx := context.Background()
 
-	if err := f.auth.ResetTwoFactor(ctx, l.User.ID); err != nil {
+	if err := f.auth.ResetTwoFactor(ctx, l.User.ID, Actor{}); err != nil {
 		t.Fatal(err)
 	}
 	if f.status(t, l.Token) != http.StatusUnauthorized {
@@ -545,7 +545,7 @@ func TestResetTwoFactor(t *testing.T) {
 	// setup kept.
 	before := len(f.sent())
 	for _, id := range []uuid.UUID{grace.User.ID, uuid.Must(uuid.NewV7())} {
-		if err := f.auth.ResetTwoFactor(ctx, id); err != nil {
+		if err := f.auth.ResetTwoFactor(ctx, id, Actor{}); err != nil {
 			t.Errorf("user %s: %v", id, err)
 		}
 	}

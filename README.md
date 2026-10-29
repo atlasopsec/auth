@@ -2,7 +2,7 @@
 
 Shared Go authentication module: sessions, passwords, OAuth, 2FA, and RBAC.
 
-> **Status: pre-release.** Under active development. The API will change until `v1.0.0`. Don't use it in production yet.
+> **Status: `v1`.** The exported Go API and the HTTP endpoints follow semantic versioning: nothing is removed or changed until `v2`. What changed in each release is in [CHANGELOG.md](CHANGELOG.md).
 
 ```go
 import "github.com/atlasopsec/auth"
@@ -56,7 +56,9 @@ Apple is native Sign in with Apple in the iOS app only, which Apple requires whe
 A user who has lost both their authenticator and their recovery codes can't get back in by themselves. After confirming who they are some other way, support turns their 2FA off from admin tooling:
 
 ```go
-err := a.ResetTwoFactor(ctx, userID) // also ends their sessions and emails them
+// Also ends their sessions and emails them. ActorOf records the support
+// agent in the security event log.
+err := a.ResetTwoFactor(ctx, userID, a.ActorOf(r))
 ```
 
 There's no endpoint for it, on purpose.
@@ -96,7 +98,8 @@ How the module is structured and how projects use it: [docs/design.md](docs/desi
 - [x] Two-factor authentication (TOTP)
 - [x] OAuth: Google, GitHub, Apple
 - [x] Rate limiting, security event log, and email sending
-- [ ] `v1.0.0`
+- [x] Next.js template
+- [x] `v1.0.0`
 
 ## Security
 

@@ -12,13 +12,14 @@ import (
 
 // SetAppRole gives a user an app role from Config.AppRoles, replacing any
 // role they had. An empty role removes it. It's for seed scripts and admin
-// tooling; there's no endpoint for it.
-func (a *Auth) SetAppRole(ctx context.Context, userID uuid.UUID, role string) error {
+// tooling; there's no endpoint for it. by is who's making the change, for
+// the security event log.
+func (a *Auth) SetAppRole(ctx context.Context, userID uuid.UUID, role string, by Actor) error {
 	if role == "" {
 		if err := a.q.DeleteUserRole(ctx, userID); err != nil {
 			return fmt.Errorf("auth: removing app role: %w", err)
 		}
-		a.recordEvent(ctx, Event{Type: EventAppRoleChanged, UserID: &userID, Metadata: map[string]string{"role": ""}})
+		a.adminEvent(ctx, by, Event{Type: EventAppRoleChanged, UserID: &userID, Metadata: map[string]string{"role": ""}})
 		return nil
 	}
 	if !a.appRoles.Defines(role) {
@@ -28,6 +29,6 @@ func (a *Auth) SetAppRole(ctx context.Context, userID uuid.UUID, role string) er
 	if err != nil {
 		return fmt.Errorf("auth: setting app role: %w", err)
 	}
-	a.recordEvent(ctx, Event{Type: EventAppRoleChanged, UserID: &userID, Metadata: map[string]string{"role": role}})
+	a.adminEvent(ctx, by, Event{Type: EventAppRoleChanged, UserID: &userID, Metadata: map[string]string{"role": role}})
 	return nil
 }
