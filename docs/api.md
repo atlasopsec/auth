@@ -1223,7 +1223,8 @@ The auth standard says these pieces are **copied** into projects, not installed,
 
 - **Plain and unbranded,** built from shadcn/ui's form components. Projects restyle them.
 - **No Apple button:** Apple sign-in is native iOS only (§9).
-- **Required 2FA:** a user who must set up 2FA (§8) is sent to the 2FA part of `/account` from every protected page until they do. The Go API already refuses everything else for them; this just avoids showing them errors.
+- **Required 2FA:** a user who must set up 2FA (§8) is sent to `/account/two-factor` from every protected page until they do, by `requireSession`. The Go API already refuses everything else for them; this just avoids showing them errors. The page also offers them a way to log out.
+- **The 2FA setup page shows a QR code** of the `otpauth://` URI, made on the server with the `qrcode` package and shown as an image, plus the key to type in by hand.
 
 ### The session cookie (Decision)
 

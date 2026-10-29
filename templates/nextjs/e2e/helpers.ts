@@ -1,7 +1,12 @@
 import { createHmac, randomInt, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 
-import { expect, type APIRequestContext } from "@playwright/test";
+import {
+  expect,
+  type APIRequestContext,
+  type Locator,
+  type Page,
+} from "@playwright/test";
 
 import { API_URL, MAIL_FILE } from "../playwright.config";
 
@@ -96,7 +101,7 @@ export function totp(secret: Buffer, steps = 0): string {
   return n.toString().padStart(6, "0");
 }
 
-function base32Decode(s: string): Buffer {
+export function base32Decode(s: string): Buffer {
   const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
   let bits = "";
   for (const c of s.replace(/=+$/, "")) {
@@ -107,4 +112,10 @@ function base32Decode(s: string): Buffer {
     bytes.push(parseInt(bits.slice(i, i + 8), 2));
   }
   return Buffer.from(bytes);
+}
+
+// field finds a visible form field by its label. Next.js keeps the page
+// you came from in the DOM, hidden, so its fields would match too.
+export function field(page: Page | Locator, label: string | RegExp): Locator {
+  return page.getByLabel(label).filter({ visible: true });
 }

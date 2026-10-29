@@ -10,6 +10,10 @@ export type FormState = {
   values?: Record<string, string>;
   // The action succeeded, for forms that stay on the page.
   done?: boolean;
+  // A 2FA setup in progress: the secret, and its QR code as an image URL.
+  setup?: { secret: string; qrCode: string };
+  // New recovery codes, shown once.
+  recoveryCodes?: string[];
 };
 
 export const SOMETHING_WENT_WRONG = "Something went wrong. Please try again.";

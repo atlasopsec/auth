@@ -61,3 +61,41 @@ describe("requireSession", () => {
     );
   });
 });
+
+describe("requireSession for users who must set up 2FA", () => {
+  function meIs(me: object) {
+    apiServer.use(http.get(`${API}/v1/users/me`, () => HttpResponse.json(me)));
+    fakeRequest.cookies.set(SESSION_COOKIE, "good-token");
+  }
+
+  it("sends them to set it up", async () => {
+    meIs({ ...testMe, two_factor_required: true, two_factor_enabled: false });
+    expect(await redirectOf(() => requireSession("/dashboard"))).toBe(
+      "/account/two-factor",
+    );
+  });
+
+  it("lets them see the setup page", async () => {
+    const me = {
+      ...testMe,
+      two_factor_required: true,
+      two_factor_enabled: false,
+    };
+    meIs(me);
+    expect(
+      await requireSession("/account/two-factor", {
+        duringTwoFactorSetup: true,
+      }),
+    ).toEqual(me);
+  });
+
+  it("lets them in once it's set up", async () => {
+    const me = {
+      ...testMe,
+      two_factor_required: true,
+      two_factor_enabled: true,
+    };
+    meIs(me);
+    expect(await requireSession("/dashboard")).toEqual(me);
+  });
+});

@@ -45,3 +45,31 @@ export const meSchema = userSchema.extend({
 });
 
 export type Me = z.infer<typeof meSchema>;
+
+// GET /v1/sessions.
+export const sessionListSchema = z.object({
+  data: z.array(
+    z.object({
+      id: z.string(),
+      client: z.string(),
+      ip: z.string().nullable(),
+      user_agent: z.string().nullable(),
+      last_used_at: z.string(),
+      expires_at: z.string(),
+      created_at: z.string(),
+      is_current: z.boolean(),
+    }),
+  ),
+});
+
+export type SessionInfo = z.infer<typeof sessionListSchema>["data"][number];
+
+// POST /v1/users/me/two-factor.
+export const twoFactorSetupSchema = z.object({
+  secret: z.string(),
+  otpauth_uri: z.string(),
+});
+
+export const recoveryCodesSchema = z.object({
+  recovery_codes: z.array(z.string()),
+});
