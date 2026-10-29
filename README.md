@@ -71,6 +71,8 @@ A background job deletes expired sessions, links, and other short-lived rows eve
 
 Logins, failed logins, logouts, and every password, 2FA, OAuth, email, and role change are recorded in `auth.auth_events`, with the IP and user agent but never secrets or email addresses. They're kept for a year. Read a user's events with `a.Events(ctx, userID, cursor)` in admin tooling, or pass each one on, for example to Sentry or PostHog, with `Hooks.OnEvent`. The full list is in [docs/api.md §10](docs/api.md).
 
+Users are emailed when they log in from a browser or app and network (IPv4 `/24` or IPv6 `/48`) that hasn't logged in to their account in the last 90 days. Override the email with `Emails.NewDeviceLogin`, or turn it off with `Config.DisableNewDeviceEmails`.
+
 ## Design
 
 How the module is structured and how projects use it: [docs/design.md](docs/design.md). The public Go API and HTTP endpoints: [docs/api.md](docs/api.md).
@@ -85,7 +87,7 @@ How the module is structured and how projects use it: [docs/design.md](docs/desi
 - [x] Roles, permissions, and organizations
 - [x] Two-factor authentication (TOTP)
 - [x] OAuth: Google, GitHub, Apple
-- [ ] Rate limiting, security event log, and email sending
+- [x] Rate limiting, security event log, and email sending
 - [ ] `v1.0.0`
 
 ## Security

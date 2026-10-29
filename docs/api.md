@@ -1150,7 +1150,8 @@ The standard says users SHOULD be emailed about logins from a new device.
 
 - **What counts as new:** a successful login whose browser or app (the user agent) and network (IPv4 `/24` or IPv6 `/48`) haven't appeared together in that user's successful logins in the last **90 days**.
 - **No notice for a brand-new account's first login.**
-- **Template:** a new `Emails.NewDeviceLogin`, with the device and approximate time. No location, since there's no IP geolocation.
+- **Template:** a new `Emails.NewDeviceLogin`, with the device and approximate time. No location, since there's no IP geolocation. `EmailData.Device` is the user agent as the client sent it (up to 512 characters, empty if none), and `EmailData.LoggedInAt` is when it happened. The user agent is whatever the client says, so templates should present it as quoted text and never as a link.
+- **Read from the event log:** there's no separate table. A login checks the user's `login_succeeded` events, before recording its own, so the memory lasts as long as the events do. Every kind of login counts: password, link, 2FA, and OAuth. Logouts and failed logins never send it.
 - **`Config.DisableNewDeviceEmails`** turns it off, for projects where it would be noise.
 - **It's a heuristic:** a changed browser version or a new Wi-Fi network counts as new. Erring toward telling the user is the point.
 

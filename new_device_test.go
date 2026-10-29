@@ -58,7 +58,7 @@ func TestNewDeviceEmail(t *testing.T) {
 		{"same /48", 0, "2001:db8:1:2::5", firefox, 0},
 		{"another /48", 0, "2001:db8:2::1", firefox, 1},
 		{"89 days later", 89 * day, "192.0.2.10", safari, 0},
-		{"91 days after the last", 91 * day, "198.51.100.10", firefox, 1},
+		{"91 days after the last", 91 * day, "192.0.2.10", safari, 1},
 	}
 	for _, s := range steps {
 		f.clock.advance(s.advance)
@@ -73,10 +73,23 @@ func TestNewDeviceEmail(t *testing.T) {
 			last = m.Text
 		}
 	}
-	for _, want := range []string{"Device: " + firefox, "Time: " + f.clock.now().Format("2 January 2006 at 15:04 UTC"), testAppURL + "/reset-password"} {
+	for _, want := range []string{"Device: " + safari, "Time: " + f.clock.now().Format("2 January 2006 at 15:04 UTC"), testAppURL + "/reset-password"} {
 		if !strings.Contains(last, want) {
 			t.Errorf("email doesn't contain %q:\n%s", want, last)
 		}
+	}
+
+	// Only logins count: logging out from a new network sends nothing.
+	l := f.logIn(t, testEmail)
+	emailsBefore := f.newDeviceEmails(testEmail)
+	if res := f.do(t, http.MethodDelete, "/v1/sessions/current", "", withToken(l.Token), fromIP("100.64.1.1")); res.status != http.StatusNoContent {
+		t.Fatalf("logging out: status %d", res.status)
+	}
+	if res := f.do(t, http.MethodPost, "/v1/sessions", credentials(testEmail, "not my password", "web"), fromIP("100.64.1.1")); res.status != http.StatusUnauthorized {
+		t.Fatalf("wrong password: status %d", res.status)
+	}
+	if got := f.newDeviceEmails(testEmail); got != emailsBefore {
+		t.Errorf("%d new-device emails for a logout and a failed login", got-emailsBefore)
 	}
 }
 
