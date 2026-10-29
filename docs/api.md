@@ -2,7 +2,7 @@
 
 The module's public Go API and the HTTP endpoints it serves.
 
-> **Status:** §1–9 cover build steps 3–7 (approved and built). §10 covers build step 8 (rate limiting and the event log) and is a draft for review. Sections marked **(Decision)** in §1–9 were confirmed in review. Later steps add to this but don't change what's here.
+> **Status:** §1–9 cover build steps 3–7 (approved and built). §10 covers build step 8 (rate limiting and the event log), approved and being built. Sections marked **(Decision)** were confirmed in review. Later steps add to this but don't change what's here.
 
 Once a name below is released, changing or removing it is a breaking change (a new major version), so this is the moment to get it right.
 
@@ -1060,8 +1060,6 @@ Confirmed in review on 2026-10-29:
 
 ## 10. Step 8: rate limiting and the security event log
 
-> **Status: draft for review.** Sections marked **(Decision)** need confirming.
-
 Step 8 adds the [auth standard](https://github.com/jakefrenzel/engineering-standards/blob/main/standards/auth.md)'s §9 and §10:
 - **Rate limits:** on logins per account and per IP, password resets, 2FA attempts, and sign-ups.
 - **Growing delays instead of lockouts:** repeated failed logins slow down further attempts, but never lock the account.
@@ -1170,7 +1168,9 @@ None: `rate_limited` (429) already exists from §8.
 3. The event log, `a.Events`, and `Hooks.OnEvent`.
 4. New-device emails.
 
-### Decisions to confirm
+### Decisions
+
+Confirmed in review on 2026-10-29:
 
 1. **Rate limits in Postgres,** with fixed windows and one atomic statement per check.
 2. **The limits in the table above:** generous per IP, with IPv6 counted per `/64`, and no configuration at first.
