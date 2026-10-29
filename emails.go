@@ -39,6 +39,14 @@ type Emails struct {
 	TwoFactorEnabled         func(EmailData) (subject, text, html string)
 	TwoFactorDisabled        func(EmailData) (subject, text, html string)
 	RecoveryCodesRegenerated func(EmailData) (subject, text, html string)
+	// RecoveryCodeUsed tells a user a recovery code was used to log in or
+	// to reset their password.
+	// RecoveryCodesLeft is set. Link is empty.
+	RecoveryCodeUsed func(EmailData) (subject, text, html string)
+	// TwoFactorGuessing warns a user that someone got past their password
+	// (or into their email, for a password reset) but then entered too
+	// many wrong 2FA codes. Link is empty.
+	TwoFactorGuessing func(EmailData) (subject, text, html string)
 }
 
 // EmailData is what an email template can use.
@@ -54,6 +62,9 @@ type EmailData struct {
 	ExpiresIn time.Duration
 	// OrgName is the organization's name, for invitations.
 	OrgName string
+	// RecoveryCodesLeft is how many unused recovery codes the user has,
+	// for RecoveryCodeUsed.
+	RecoveryCodesLeft int
 }
 
 func defaultVerifyEmail(d EmailData) (string, string, string) {
@@ -156,6 +167,28 @@ func defaultRecoveryCodesRegenerated(d EmailData) (string, string, string) {
 		fmt.Sprintf(`New two-factor recovery codes were just created for your %s account. The old ones no longer work.
 
 If you didn't do this, reset your password now at %s/reset-password.
+`, d.AppName, d.AppURL),
+		""
+}
+
+func defaultRecoveryCodeUsed(d EmailData) (string, string, string) {
+	codes := fmt.Sprintf("%d recovery codes", d.RecoveryCodesLeft)
+	if d.RecoveryCodesLeft == 1 {
+		codes = "1 recovery code"
+	}
+	return "A recovery code was used for your " + d.AppName + " account",
+		fmt.Sprintf(`A recovery code was just used for your %s account, to log in or to reset its password. You have %s left. If you're running low, create new ones in your account settings.
+
+If you didn't do this, reset your password now at %s/reset-password, then create new recovery codes.
+`, d.AppName, codes, d.AppURL),
+		""
+}
+
+func defaultTwoFactorGuessing(d EmailData) (string, string, string) {
+	return "Someone is trying to get into your " + d.AppName + " account",
+		fmt.Sprintf(`Someone tried to log in to your %s account, or to reset its password, and entered too many wrong two-factor codes. Codes won't be accepted for the next 15 minutes.
+
+To get that far, they needed your password or access to this email account. If it wasn't you, change your password now at %s/reset-password, and change your email password too.
 `, d.AppName, d.AppURL),
 		""
 }

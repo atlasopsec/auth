@@ -60,6 +60,62 @@ func (q *Queries) CreateRecoveryCode(ctx context.Context, arg CreateRecoveryCode
 	return err
 }
 
+const createTwoFactorChallenge = `-- name: CreateTwoFactorChallenge :exec
+INSERT INTO auth.two_factor_challenges (id, user_id, token_hash, client, expires_at, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $6)
+`
+
+type CreateTwoFactorChallengeParams struct {
+	ID        uuid.UUID
+	UserID    uuid.UUID
+	TokenHash []byte
+	Client    string
+	ExpiresAt time.Time
+	Now       time.Time
+}
+
+func (q *Queries) CreateTwoFactorChallenge(ctx context.Context, arg CreateTwoFactorChallengeParams) error {
+	_, err := q.db.Exec(ctx, createTwoFactorChallenge,
+		arg.ID,
+		arg.UserID,
+		arg.TokenHash,
+		arg.Client,
+		arg.ExpiresAt,
+		arg.Now,
+	)
+	return err
+}
+
+const createTwoFactorFailure = `-- name: CreateTwoFactorFailure :exec
+INSERT INTO auth.two_factor_failures (id, user_id, created_at, updated_at)
+VALUES ($1, $2, $3, $3)
+`
+
+type CreateTwoFactorFailureParams struct {
+	ID     uuid.UUID
+	UserID uuid.UUID
+	Now    time.Time
+}
+
+func (q *Queries) CreateTwoFactorFailure(ctx context.Context, arg CreateTwoFactorFailureParams) error {
+	_, err := q.db.Exec(ctx, createTwoFactorFailure, arg.ID, arg.UserID, arg.Now)
+	return err
+}
+
+const deleteOldTwoFactorFailures = `-- name: DeleteOldTwoFactorFailures :exec
+DELETE FROM auth.two_factor_failures WHERE user_id = $1 AND created_at <= $2
+`
+
+type DeleteOldTwoFactorFailuresParams struct {
+	UserID uuid.UUID
+	Since  time.Time
+}
+
+func (q *Queries) DeleteOldTwoFactorFailures(ctx context.Context, arg DeleteOldTwoFactorFailuresParams) error {
+	_, err := q.db.Exec(ctx, deleteOldTwoFactorFailures, arg.UserID, arg.Since)
+	return err
+}
+
 const deleteRecoveryCodes = `-- name: DeleteRecoveryCodes :exec
 DELETE FROM auth.recovery_codes WHERE user_id = $1
 `
@@ -69,12 +125,39 @@ func (q *Queries) DeleteRecoveryCodes(ctx context.Context, userID uuid.UUID) err
 	return err
 }
 
+const deleteSpentTwoFactorChallenges = `-- name: DeleteSpentTwoFactorChallenges :exec
+DELETE FROM auth.two_factor_challenges
+WHERE user_id = $1
+  AND (used_at IS NOT NULL OR expires_at <= $2 OR failed_attempts >= $3)
+`
+
+type DeleteSpentTwoFactorChallengesParams struct {
+	UserID            uuid.UUID
+	Now               time.Time
+	MaxFailedAttempts int32
+}
+
+// Also clears out the user's challenges that can no longer be used.
+func (q *Queries) DeleteSpentTwoFactorChallenges(ctx context.Context, arg DeleteSpentTwoFactorChallengesParams) error {
+	_, err := q.db.Exec(ctx, deleteSpentTwoFactorChallenges, arg.UserID, arg.Now, arg.MaxFailedAttempts)
+	return err
+}
+
 const deleteTOTPSecret = `-- name: DeleteTOTPSecret :exec
 DELETE FROM auth.totp_secrets WHERE user_id = $1
 `
 
 func (q *Queries) DeleteTOTPSecret(ctx context.Context, userID uuid.UUID) error {
 	_, err := q.db.Exec(ctx, deleteTOTPSecret, userID)
+	return err
+}
+
+const deleteTwoFactorChallenges = `-- name: DeleteTwoFactorChallenges :exec
+DELETE FROM auth.two_factor_challenges WHERE user_id = $1
+`
+
+func (q *Queries) DeleteTwoFactorChallenges(ctx context.Context, userID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, deleteTwoFactorChallenges, userID)
 	return err
 }
 
@@ -115,6 +198,51 @@ func (q *Queries) GetTOTPSecretForUpdate(ctx context.Context, userID uuid.UUID) 
 	return i, err
 }
 
+const getTwoFactorChallengeForUpdate = `-- name: GetTwoFactorChallengeForUpdate :one
+SELECT id, user_id, token_hash, client, failed_attempts, expires_at, used_at, created_at, updated_at FROM auth.two_factor_challenges WHERE token_hash = $1 FOR UPDATE
+`
+
+// Locks the challenge, so concurrent requests count wrong codes and use it
+// one at a time.
+func (q *Queries) GetTwoFactorChallengeForUpdate(ctx context.Context, tokenHash []byte) (AuthTwoFactorChallenge, error) {
+	row := q.db.QueryRow(ctx, getTwoFactorChallengeForUpdate, tokenHash)
+	var i AuthTwoFactorChallenge
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.TokenHash,
+		&i.Client,
+		&i.FailedAttempts,
+		&i.ExpiresAt,
+		&i.UsedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const nthRecentTwoFactorFailure = `-- name: NthRecentTwoFactorFailure :one
+SELECT created_at FROM auth.two_factor_failures
+WHERE user_id = $1 AND created_at > $2
+ORDER BY created_at DESC
+OFFSET $3 LIMIT 1
+`
+
+type NthRecentTwoFactorFailureParams struct {
+	UserID uuid.UUID
+	Since  time.Time
+	N      int32
+}
+
+// Returns the time of the user's nth most recent wrong code since @since
+// (counting from 0), if there are that many.
+func (q *Queries) NthRecentTwoFactorFailure(ctx context.Context, arg NthRecentTwoFactorFailureParams) (time.Time, error) {
+	row := q.db.QueryRow(ctx, nthRecentTwoFactorFailure, arg.UserID, arg.Since, arg.N)
+	var created_at time.Time
+	err := row.Scan(&created_at)
+	return created_at, err
+}
+
 const recordTOTPStep = `-- name: RecordTOTPStep :exec
 UPDATE auth.totp_secrets SET last_used_step = $1, updated_at = $2 WHERE user_id = $3
 `
@@ -127,6 +255,22 @@ type RecordTOTPStepParams struct {
 
 func (q *Queries) RecordTOTPStep(ctx context.Context, arg RecordTOTPStepParams) error {
 	_, err := q.db.Exec(ctx, recordTOTPStep, arg.Step, arg.Now, arg.UserID)
+	return err
+}
+
+const recordTwoFactorChallengeFailure = `-- name: RecordTwoFactorChallengeFailure :exec
+UPDATE auth.two_factor_challenges
+SET failed_attempts = failed_attempts + 1, updated_at = $1
+WHERE id = $2
+`
+
+type RecordTwoFactorChallengeFailureParams struct {
+	Now time.Time
+	ID  uuid.UUID
+}
+
+func (q *Queries) RecordTwoFactorChallengeFailure(ctx context.Context, arg RecordTwoFactorChallengeFailureParams) error {
+	_, err := q.db.Exec(ctx, recordTwoFactorChallengeFailure, arg.Now, arg.ID)
 	return err
 }
 
@@ -171,4 +315,18 @@ func (q *Queries) UseRecoveryCode(ctx context.Context, arg UseRecoveryCodeParams
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const useTwoFactorChallenge = `-- name: UseTwoFactorChallenge :exec
+UPDATE auth.two_factor_challenges SET used_at = $1, updated_at = $1 WHERE id = $2
+`
+
+type UseTwoFactorChallengeParams struct {
+	Now *time.Time
+	ID  uuid.UUID
+}
+
+func (q *Queries) UseTwoFactorChallenge(ctx context.Context, arg UseTwoFactorChallengeParams) error {
+	_, err := q.db.Exec(ctx, useTwoFactorChallenge, arg.Now, arg.ID)
+	return err
 }

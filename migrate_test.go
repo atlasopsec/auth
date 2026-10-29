@@ -48,7 +48,7 @@ func TestMigrateCreatesTablesInAuthSchema(t *testing.T) {
 		t.Fatalf("Migrate() error = %v", err)
 	}
 
-	want := []string{"email_tokens", "goose_db_version", "invitations", "memberships", "organizations", "recovery_codes", "sessions", "totp_secrets", "user_roles", "users"}
+	want := []string{"email_tokens", "goose_db_version", "invitations", "memberships", "organizations", "recovery_codes", "sessions", "totp_secrets", "two_factor_challenges", "two_factor_failures", "user_roles", "users"}
 	if diff := cmp.Diff(want, tablesIn(t, pool, "auth")); diff != "" {
 		t.Errorf("tables in auth schema (-want +got):\n%s", diff)
 	}

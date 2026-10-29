@@ -759,7 +759,8 @@ POST /v1/two-factor-challenges/verify
 - **Codes are accepted for the current 30-second step and one either side,** to allow for clock drift. A code that's been used is never accepted again, so a code someone watched you type is useless.
 - **`code` takes a TOTP code or a recovery code.** The format tells them apart.
 - **Every way into a session goes through the challenge.** That includes the verification link (§6), which returns a challenge instead of a session when 2FA is on.
-- **A wrong code** returns `401 invalid_two_factor_code`.
+- **A wrong code** returns `401 invalid_two_factor_code`. A used or expired challenge, or one with 5 wrong codes, returns `401 two_factor_challenge_invalid`.
+- **Changing or resetting the password ends pending challenges,** since each proves the old password.
 
 ### Recovery codes (Decision)
 
@@ -790,7 +791,7 @@ a.SetTwoFactorRequired(ctx, userID, true) // an individual user (the standard)
 
 Rate limiting arrives in step 8. Until then, someone who already has the password could keep starting new challenges and guessing.
 
-- **The limit:** after **10 wrong codes in 15 minutes** across all of a user's challenges, logging in for that user stops issuing challenges until the 15 minutes pass (`429 rate_limited`, with `Retry-After`).
+- **The limit:** after **10 wrong codes in 15 minutes** across all of a user's challenges and password resets, logging in for that user stops issuing challenges until the 15 minutes pass (`429 rate_limited`, with `Retry-After`). Codes sent to challenges started earlier, and to password resets, get the same `429`, so challenges opened ahead of time can't be used to keep guessing.
 - **It's a temporary pause, not a lockout,** in line with the standard's "slow down, don't lock out".
 - **The user is emailed when it trips:** "someone entered your password correctly but not your 2FA code; change your password". By then someone has their password.
 
@@ -820,19 +821,23 @@ The user is emailed that 2FA was turned off. If 2FA is required for them, they'r
 
 ### Notices
 
-Users are emailed when 2FA is turned on or off, when recovery codes are regenerated, and when a recovery code is used (with how many are left). The standard says users SHOULD be told about new 2FA settings. The templates join `Emails`: `TwoFactorEnabled`, `TwoFactorDisabled`, and `RecoveryCodesRegenerated` (PR 1), then `RecoveryCodeUsed` and the guessing-limit warning (PR 2).
+Users are emailed when 2FA is turned on or off, when recovery codes are regenerated, and when a recovery code is used (with how many are left). The standard says users SHOULD be told about new 2FA settings. The templates join `Emails`: `TwoFactorEnabled`, `TwoFactorDisabled`, and `RecoveryCodesRegenerated` (PR 1), then `RecoveryCodeUsed` and `TwoFactorGuessing`, the guessing-limit warning (PR 2).
 
 ### Database
 
-Migration `00005`:
+Migrations `00005` (PR 1) and `00006` (PR 2):
 
 ```
 auth.totp_secrets            user_id (primary key), secret_encrypted, last_used_step,
                              confirmed_at, created_at, updated_at
-auth.recovery_codes          id, user_id, code_hash, used_at, created_at
-auth.two_factor_challenges   id, user_id, token_hash, client, ip, user_agent,
-                             failed_attempts, expires_at, used_at, created_at
+auth.recovery_codes          id, user_id, code_hash, used_at, created_at, updated_at
+auth.two_factor_challenges   id, user_id, token_hash, client, failed_attempts,
+                             expires_at, used_at, created_at, updated_at
+auth.two_factor_failures     id, user_id, created_at, updated_at
 ```
+
+- **Challenges don't store an IP or user agent.** The session takes them from the verify request, which comes from the device that will use it.
+- **`two_factor_failures` has a row per wrong code** for the guessing limit, which counts across challenges and password resets. Rows older than 15 minutes are deleted as new ones are added.
 
 `auth.users.two_factor_required` already exists (migration `00001`).
 
@@ -840,7 +845,8 @@ auth.two_factor_challenges   id, user_id, token_hash, client, ip, user_agent,
 
 | Code | Status | When |
 |---|---|---|
-| `invalid_two_factor_code` | 401 | Wrong TOTP or recovery code at login. The logged-in setup endpoints use `422 validation_failed` with `code: incorrect` instead, since a 401 would tell the app the user was logged out |
+| `invalid_two_factor_code` | 401 | Wrong TOTP or recovery code at login or password reset. The logged-in setup endpoints use `422 validation_failed` with `code: incorrect` instead, since a 401 would tell the app the user was logged out |
+| `two_factor_challenge_invalid` | 401 | The challenge is used, expired, or had 5 wrong codes. Log in with the password again |
 | `two_factor_already_enabled` | 409 | Starting or confirming setup when 2FA is already on |
 | `two_factor_not_enabled` | 409 | Turning off 2FA, or regenerating codes, when it's off |
 | `two_factor_setup_not_started` | 409 | Confirming before starting setup |
