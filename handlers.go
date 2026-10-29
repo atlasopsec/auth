@@ -282,7 +282,7 @@ func (a *Auth) logIn(w http.ResponseWriter, r *http.Request) {
 		// password check's worth of work so the response takes as long as
 		// a wrong password would, and count it the same.
 		password.SimulateVerify(req.Password)
-		a.wrongPassword(w, r, req.Email, from)
+		a.wrongPassword(w, r, nil, req.Email, from)
 		return
 	}
 	if err != nil {
@@ -295,7 +295,7 @@ func (a *Auth) logIn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !ok {
-		a.wrongPassword(w, r, req.Email, from)
+		a.wrongPassword(w, r, &row.ID, req.Email, from)
 		return
 	}
 	if err := a.clearLoginFailures(r.Context(), req.Email, from); err != nil {
@@ -327,11 +327,14 @@ func (a *Auth) logIn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.logEvent(r, "auth: user logged in", row.ID)
+	a.event(r, EventLoginSucceeded, &row.ID, nil, map[string]string{"method": "password"})
 	httpapi.WriteJSON(w, r, http.StatusCreated, loginResponse{User: toUserJSON(userFromRow(row)), Token: tok, ExpiresAt: timestamp(s.ExpiresAt)})
 }
 
-// wrongPassword counts a failed login and answers it.
-func (a *Auth) wrongPassword(w http.ResponseWriter, r *http.Request, email, ip string) {
+// wrongPassword counts a failed login and answers it. userID is nil for an
+// email without a password.
+func (a *Auth) wrongPassword(w http.ResponseWriter, r *http.Request, userID *uuid.UUID, email, ip string) {
+	a.event(r, EventLoginFailed, userID, nil, map[string]string{"method": "password"})
 	if err := a.recordLoginFailure(r.Context(), email, ip); err != nil {
 		httpapi.WriteInternalError(w, r, a.log, err)
 		return
@@ -434,6 +437,7 @@ func (a *Auth) logOut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.logEvent(r, "auth: user logged out", c.user.ID)
+	a.event(r, EventLogout, &c.user.ID, nil, nil)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -454,6 +458,7 @@ func (a *Auth) endSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.logEvent(r, "auth: session ended", c.user.ID)
+	a.event(r, EventSessionEnded, &c.user.ID, nil, nil)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -464,6 +469,7 @@ func (a *Auth) logOutEverywhere(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.logEvent(r, "auth: user logged out everywhere", c.user.ID)
+	a.event(r, EventLogoutEverywhere, &c.user.ID, nil, nil)
 	w.WriteHeader(http.StatusNoContent)
 }
 

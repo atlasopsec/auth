@@ -265,6 +265,9 @@ func (a *Auth) writeOAuthLogin(w http.ResponseWriter, r *http.Request, provider 
 	case res.linked:
 		a.logEvent(r, "auth: "+provider+" linked by verified email", res.user.ID)
 	}
+	if res.created || res.linked {
+		a.event(r, EventOAuthLinked, &res.user.ID, nil, map[string]string{"provider": provider})
+	}
 	if res.tookBack {
 		a.logEvent(r, "auth: unverified account taken back by its email's owner", res.user.ID)
 	}
@@ -274,6 +277,7 @@ func (a *Auth) writeOAuthLogin(w http.ResponseWriter, r *http.Request, provider 
 		return
 	}
 	a.logEvent(r, "auth: user logged in with "+provider, res.user.ID)
+	a.event(r, EventLoginSucceeded, &res.user.ID, nil, map[string]string{"method": provider})
 	httpapi.WriteJSON(w, r, http.StatusCreated, loginResponse{User: toUserJSON(userFromRow(res.user)), Token: res.token, ExpiresAt: timestamp(res.expires)})
 }
 

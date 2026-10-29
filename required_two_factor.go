@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -61,5 +62,6 @@ func (a *Auth) SetTwoFactorRequired(ctx context.Context, userID uuid.UUID, requi
 	if n == 0 {
 		return fmt.Errorf("auth: setting 2FA required: no user %s", userID)
 	}
+	a.recordEvent(ctx, Event{Type: EventTwoFactorRequiredChanged, UserID: &userID, Metadata: map[string]string{"required": strconv.FormatBool(required)}})
 	return nil
 }

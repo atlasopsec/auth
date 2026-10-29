@@ -11,6 +11,18 @@ import (
 	"github.com/google/uuid"
 )
 
+type AuthAuthEvent struct {
+	ID        uuid.UUID
+	UserID    *uuid.UUID
+	ActorID   *uuid.UUID
+	Event     string
+	Ip        *netip.Addr
+	UserAgent *string
+	Metadata  []byte
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
 type AuthEmailToken struct {
 	ID             uuid.UUID
 	UserID         uuid.UUID

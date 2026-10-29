@@ -253,7 +253,7 @@ func (a *Auth) acceptInvitation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	org, err := a.accept(r.Context(), req.Token, c.user)
+	org, invitedBy, err := a.accept(r.Context(), req.Token, c.user)
 	switch {
 	case errors.Is(err, errInvitationInvalid):
 		writeTokenInvalid(w, r)
@@ -268,6 +268,7 @@ func (a *Auth) acceptInvitation(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteInternalError(w, r, a.log, err)
 	default:
 		a.logEvent(r, "auth: invitation accepted", c.user.ID)
+		a.event(r, EventMemberAdded, &c.user.ID, &invitedBy, map[string]string{"organization_id": org.ID.String(), "role": org.Role})
 		httpapi.WriteJSON(w, r, http.StatusOK, org)
 	}
 }
@@ -276,61 +277,61 @@ var errEmailNotVerifiedForInvite = errors.New("email not verified")
 
 // accept checks and spends the invitation and adds the membership, all or
 // nothing. It returns the organization as the new member sees it.
-func (a *Auth) accept(ctx context.Context, tok string, u User) (orgJSON, error) {
+func (a *Auth) accept(ctx context.Context, tok string, u User) (orgJSON, uuid.UUID, error) {
 	inv, err := a.q.GetInvitationByTokenHash(ctx, token.Hash(tok))
 	if errors.Is(err, pgx.ErrNoRows) {
-		return orgJSON{}, errInvitationInvalid
+		return orgJSON{}, uuid.UUID{}, errInvitationInvalid
 	}
 	if err != nil {
-		return orgJSON{}, fmt.Errorf("finding invitation: %w", err)
+		return orgJSON{}, uuid.UUID{}, fmt.Errorf("finding invitation: %w", err)
 	}
 	now := a.now().UTC().Truncate(time.Microsecond)
 	// A role removed from code since the invitation was sent grants
 	// nothing, so the invitation is no use.
 	if inv.AcceptedAt != nil || !now.Before(inv.ExpiresAt) || !a.orgRoles.Defines(inv.Role) {
-		return orgJSON{}, errInvitationInvalid
+		return orgJSON{}, uuid.UUID{}, errInvitationInvalid
 	}
 	if !strings.EqualFold(inv.Email, u.Email) {
-		return orgJSON{}, errEmailMismatch
+		return orgJSON{}, uuid.UUID{}, errEmailMismatch
 	}
 	if !u.EmailVerified {
-		return orgJSON{}, errEmailNotVerifiedForInvite
+		return orgJSON{}, uuid.UUID{}, errEmailNotVerifiedForInvite
 	}
 	membershipID, err := uuid.NewV7()
 	if err != nil {
-		return orgJSON{}, fmt.Errorf("generating membership ID: %w", err)
+		return orgJSON{}, uuid.UUID{}, fmt.Errorf("generating membership ID: %w", err)
 	}
 
 	tx, err := a.pool.Begin(ctx)
 	if err != nil {
-		return orgJSON{}, fmt.Errorf("beginning acceptance: %w", err)
+		return orgJSON{}, uuid.UUID{}, fmt.Errorf("beginning acceptance: %w", err)
 	}
 	// After Commit this is a no-op.
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 	q := db.New(tx)
 	n, err := q.AcceptInvitation(ctx, db.AcceptInvitationParams{ID: inv.ID, Now: &now})
 	if err != nil {
-		return orgJSON{}, fmt.Errorf("accepting invitation: %w", err)
+		return orgJSON{}, uuid.UUID{}, fmt.Errorf("accepting invitation: %w", err)
 	}
 	if n == 0 {
 		// Used or cancelled by a concurrent request.
-		return orgJSON{}, errInvitationInvalid
+		return orgJSON{}, uuid.UUID{}, errInvitationInvalid
 	}
 	err = q.CreateMembership(ctx, db.CreateMembershipParams{
 		ID: membershipID, OrganizationID: inv.OrganizationID, UserID: u.ID, Role: inv.Role, Now: now,
 	})
 	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == "23505" && pgErr.ConstraintName == "memberships_organization_user_key" {
-		return orgJSON{}, errAlreadyMember
+		return orgJSON{}, uuid.UUID{}, errAlreadyMember
 	}
 	if err != nil {
-		return orgJSON{}, fmt.Errorf("adding member: %w", err)
+		return orgJSON{}, uuid.UUID{}, fmt.Errorf("adding member: %w", err)
 	}
 	row, err := q.GetMemberOrganization(ctx, db.GetMemberOrganizationParams{OrganizationID: inv.OrganizationID, UserID: u.ID})
 	if err != nil {
-		return orgJSON{}, fmt.Errorf("reading organization: %w", err)
+		return orgJSON{}, uuid.UUID{}, fmt.Errorf("reading organization: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return orgJSON{}, fmt.Errorf("committing acceptance: %w", err)
+		return orgJSON{}, uuid.UUID{}, fmt.Errorf("committing acceptance: %w", err)
 	}
-	return toOrgJSON(Organization{ID: row.ID, Name: row.Name, CreatedAt: row.CreatedAt.UTC(), UpdatedAt: row.UpdatedAt.UTC()}, row.Role), nil
+	return toOrgJSON(Organization{ID: row.ID, Name: row.Name, CreatedAt: row.CreatedAt.UTC(), UpdatedAt: row.UpdatedAt.UTC()}, row.Role), inv.InvitedBy, nil
 }

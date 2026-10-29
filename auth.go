@@ -123,6 +123,12 @@ type Hooks struct {
 	// undone. Keep it quick, since the transaction stays open while it
 	// runs.
 	OnUserCreated func(ctx context.Context, tx pgx.Tx, u User) error
+
+	// OnEvent runs after each security event is recorded, for projects
+	// that also want auth events in their own tools, such as alerting or
+	// Sentry. It runs in the request, so keep it quick and hand slow work
+	// off. See the Event constants.
+	OnEvent func(ctx context.Context, e Event)
 }
 
 // Auth serves the module's endpoints and protects the project's own.

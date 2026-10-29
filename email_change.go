@@ -131,6 +131,7 @@ func (a *Auth) confirmEmailChange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.logEvent(r, "auth: email changed", t.UserID)
+	a.event(r, EventEmailChanged, &t.UserID, nil, nil)
 	a.sendNotice(oldEmail, a.emails.EmailChanged)
 	w.WriteHeader(http.StatusNoContent)
 }

@@ -178,6 +178,7 @@ func (a *Auth) finishLink(w http.ResponseWriter, r *http.Request, flow db.AuthOa
 		return
 	}
 	a.logEvent(r, "auth: "+flow.Provider+" linked", userID)
+	a.event(r, EventOAuthLinked, &userID, nil, map[string]string{"provider": flow.Provider})
 	a.sendProviderNotice(ctx, userID, a.emails.OAuthLinked, flow.Provider)
 	httpapi.WriteJSON(w, r, http.StatusCreated, toOAuthAccountJSON(acct))
 }
@@ -258,6 +259,7 @@ func (a *Auth) unlink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.logEvent(r, "auth: "+provider+" unlinked", c.user.ID)
+	a.event(r, EventOAuthUnlinked, &c.user.ID, nil, map[string]string{"provider": provider})
 	a.sendProviderNotice(ctx, c.user.ID, a.emails.OAuthUnlinked, provider)
 	w.WriteHeader(http.StatusNoContent)
 }

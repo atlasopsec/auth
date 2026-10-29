@@ -277,14 +277,17 @@ func (a *Auth) verifyChallenge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !check.ok {
+		a.event(r, EventLoginFailed, &user.ID, nil, map[string]string{"method": "two_factor"})
 		a.wrongLoginCode(w, r, user, check)
 		return
 	}
 	if check.usedRecovery {
 		a.logEvent(r, "auth: recovery code used", user.ID)
+		a.event(r, EventRecoveryCodeUsed, &user.ID, nil, nil)
 		a.send(user.Email, a.emails.RecoveryCodeUsed, EmailData{AppName: a.appName, AppURL: a.appURL, RecoveryCodesLeft: int(left)}, uuid.Must(uuid.NewV7()))
 	}
 	a.logEvent(r, "auth: user logged in", user.ID)
+	a.event(r, EventLoginSucceeded, &user.ID, nil, map[string]string{"method": "two_factor"})
 	httpapi.WriteJSON(w, r, http.StatusCreated, loginResponse{User: toUserJSON(userFromRow(user)), Token: tok, ExpiresAt: timestamp(s.ExpiresAt)})
 }
 
@@ -356,6 +359,7 @@ func (a *Auth) ResetTwoFactor(ctx context.Context, userID uuid.UUID) error {
 	}
 	if email != "" {
 		a.log.InfoContext(ctx, "auth: two-factor reset", slog.String("user_id", userID.String()))
+		a.recordEvent(ctx, Event{Type: EventTwoFactorReset, UserID: &userID})
 		a.sendNotice(email, a.emails.TwoFactorDisabled)
 	}
 	return nil
