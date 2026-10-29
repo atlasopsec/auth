@@ -15,6 +15,7 @@ import (
 
 	"github.com/atlasopsec/auth/internal/db"
 	"github.com/atlasopsec/auth/internal/emailtoken"
+	"github.com/atlasopsec/auth/internal/oauth"
 	"github.com/atlasopsec/auth/internal/pwned"
 	"github.com/atlasopsec/auth/internal/secretbox"
 	"github.com/atlasopsec/auth/internal/sender"
@@ -101,6 +102,9 @@ type Config struct {
 	// GET /v1/users/me, and log out. Each name must be defined in OrgRoles
 	// or AppRoles.
 	TwoFactorRoles []string
+
+	// OAuth turns on signing in with Google and GitHub.
+	OAuth OAuth
 }
 
 // Hooks let a project react to auth events.
@@ -134,10 +138,12 @@ type Auth struct {
 	emails          Emails
 	box             *secretbox.Box
 	// breach is nil when the breach check is disabled.
-	breach             breachChecker
-	orgRoles           rbac.Roles
-	appRoles           rbac.Roles
-	twoFactorRoles     []string
+	breach         breachChecker
+	orgRoles       rbac.Roles
+	appRoles       rbac.Roles
+	twoFactorRoles []string
+	// providers are the OAuth providers turned on, by name.
+	providers          map[string]oauth.Provider
 	disableOrgCreation bool
 }
 
@@ -247,6 +253,9 @@ func New(cfg Config) (*Auth, error) {
 	}
 	if !cfg.DisableBreachCheck {
 		a.breach = pwned.New(pwned.DefaultURL)
+	}
+	if a.providers, err = newProviders(cfg.OAuth, a.now); err != nil {
+		return nil, err
 	}
 	a.sessions = session.NewManager(cfg.DB, a.now)
 	a.tokens = emailtoken.NewManager(cfg.DB, a.now)

@@ -788,6 +788,105 @@ paths:
         "422": { $ref: "#/components/responses/ValidationFailed" }
         "500": { $ref: "#/components/responses/InternalError" }
 
+  /v1/oauth-flows:
+    post:
+      operationId: startOAuthFlow
+      summary: Start signing in with Google or GitHub
+      description: >
+        Returns the provider URL to send the user to. The client keeps a
+        random `client_verifier` (in an `HttpOnly` cookie on the web, in
+        memory on mobile) and sends its SHA-256 as `client_challenge`; only
+        it can finish the flow. The provider redirects to
+        `{AppURL}/oauth/callback` (web) or `{AppURL}/oauth/callback/mobile`
+        (mobile) with `code` and `state`. A flow works once, for 10 minutes.
+      tags: [sessions]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [provider, client, client_challenge]
+              properties:
+                provider:
+                  type: string
+                  enum: [google, github]
+                  description: Only providers turned on in `Config.OAuth` are accepted.
+                client: { type: string, enum: [web, mobile] }
+                client_challenge:
+                  type: string
+                  description: Base64url (no padding) SHA-256 of the client verifier.
+      responses:
+        "201":
+          description: Flow started.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [authorization_url, expires_at]
+                properties:
+                  authorization_url: { type: string }
+                  expires_at: { type: string, format: date-time }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /v1/oauth-flows/complete:
+    post:
+      operationId: completeOAuthFlow
+      summary: Finish signing in with Google or GitHub
+      description: >
+        With the `code` and `state` from the provider's redirect, and the
+        client verifier. Signs in the account linked to the provider
+        account; otherwise, if the provider says the email is verified,
+        the account with that email (taking back one whose email was never
+        verified) or a new account without a password. Users with 2FA get
+        a challenge instead of a session.
+      tags: [sessions]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [state, code, client_verifier]
+              properties:
+                state: { type: string }
+                code: { type: string }
+                client_verifier: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/TwoFactorChallenge" }
+        "201":
+          description: Logged in.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LoginResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401":
+          description: >
+            `oauth_failed`: the flow is unknown, used, or expired, the client
+            verifier doesn't match, or the provider refused the code. Start
+            again.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "403":
+          description: >
+            `oauth_email_not_verified`: the provider doesn't vouch for the
+            email address, and no account is linked yet.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
   /v1/two-factor-challenges/verify:
     post:
       operationId: verifyTwoFactorChallenge

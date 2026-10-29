@@ -902,15 +902,14 @@ auth.Config{
 			KeyID:      "…",
 			PrivateKey: os.Getenv("APPLE_PRIVATE_KEY"), // the .p8 key, PEM
 		},
-		// The app's deep link for finishing sign-in on mobile.
-		MobileRedirectURL: "exampleapp://oauth/callback",
 	},
 }
 ```
 
-- **A nil provider is turned off,** and its endpoints answer `404`.
+- **A nil provider is turned off.** Starting a flow for it answers `422` with `provider: invalid_value`, since the provider is a body field rather than part of the path.
 - **Secrets come from Railway variables,** like every other secret. The module builds Apple's client secret, a short-lived JWT signed with the `.p8` key, itself.
 - **Providers redirect to the web app,** at `{AppURL}/oauth/callback` and `{AppURL}/oauth/callback/mobile`, which are registered with each provider. The Go API isn't public, so it can't receive the redirect itself. Step 9's Next.js template provides both pages.
+- **The mobile app's deep link is the web app's setting,** not the Go API's: only the mobile callback page uses it. So `Config.OAuth` has no `MobileRedirectURL`.
 
 ### One flow for web and mobile (Decision)
 
@@ -944,6 +943,7 @@ POST /v1/oauth-flows/complete
 
   The client verifier blocks both, because only the device that started the flow has it.
 - **A flow works once, for 10 minutes.** Its PKCE verifier is stored encrypted with `EncryptionKey`.
+- **The flow is spent before the provider is called,** so it can't be finished twice even if that call fails. A wrong client verifier doesn't spend it, so a stray request can't cancel the real device's sign-in.
 - **Apple on the web posts its response** (`response_mode=form_post`) when email is requested. The callback page accepts `POST` as well as `GET`.
 
 ### Sign in with Apple on iOS (Decision)
