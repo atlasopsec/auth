@@ -1264,6 +1264,9 @@ The auth standard says these pieces are **copied** into projects, not installed,
 
 - The token is after `#` (§6), which never reaches the server. So each link page has a small client component that reads it, removes it from the address bar with `history.replaceState`, and posts it to a server action.
 - Pages that need more than the token (a new password, a 2FA code) show their form first and send the token with it.
+- **Nothing happens on opening a link alone:** each page waits for a button press (verifying also asks for the password, as §6 requires), so mail scanners that open links don't change anything.
+- **Invitations for a logged-out user** have to survive logging in or signing up first. The page moves the token into a 24-hour `HttpOnly` cookie, `__Host-invitation`, and the login and verification pages come back to `/accept-invitation` while it's set. It's cleared once accepted, or when the Go API says it's used up; an invitation for a different address is kept, so the user can log in with the right one.
+- **After a password reset or email change**, which end every session, the session cookie is cleared and the login page says what happened. It only shows fixed messages, never text from the URL.
 
 ### 2FA at login (Decision)
 
