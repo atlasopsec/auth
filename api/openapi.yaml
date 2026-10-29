@@ -902,6 +902,56 @@ paths:
         "429": { $ref: "#/components/responses/RateLimited" }
         "500": { $ref: "#/components/responses/InternalError" }
 
+  /v1/apple-sign-ins:
+    post:
+      operationId: appleSignIn
+      summary: Sign in with Apple, from the iOS app
+      description: >
+        Native Sign in with Apple only; Apple isn't offered on the web or
+        Android. The app generates a random nonce, gives Apple its hex
+        SHA-256, and sends the nonce itself with the identity token from
+        the Apple sheet. The account rules are the same as for
+        `POST /v1/oauth-flows/complete`, and the session is a mobile one.
+        Answers `404` when Apple isn't turned on.
+      tags: [sessions]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [identity_token, nonce]
+              properties:
+                identity_token: { type: string }
+                nonce: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/TwoFactorChallenge" }
+        "201":
+          description: Logged in.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LoginResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401":
+          description: "`oauth_failed`: the token or nonce didn't check out."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "403":
+          description: >
+            `oauth_email_not_verified`: Apple doesn't vouch for the email
+            address, and no account is linked yet.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
   /v1/users/me/oauth-accounts:
     get:
       operationId: listOAuthAccounts
@@ -1202,7 +1252,7 @@ components:
       required: [id, provider, email, created_at]
       properties:
         id: { type: string, format: uuid }
-        provider: { type: string, enum: [google, github] }
+        provider: { type: string, enum: [google, github, apple] }
         email:
           type: string
           description: The provider's address when linked, for display. Empty if the provider gave none.

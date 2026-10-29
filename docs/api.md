@@ -895,19 +895,13 @@ auth.Config{
 	OAuth: auth.OAuth{
 		Google: &auth.Google{ClientID: "…", ClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET")},
 		GitHub: &auth.GitHub{ClientID: "…", ClientSecret: os.Getenv("GITHUB_CLIENT_SECRET")},
-		Apple: &auth.Apple{
-			ServicesID: "com.example.web",       // web and Android sign-in
-			BundleIDs:  []string{"com.example.app"}, // the iOS app, for native sign-in
-			TeamID:     "…",
-			KeyID:      "…",
-			PrivateKey: os.Getenv("APPLE_PRIVATE_KEY"), // the .p8 key, PEM
-		},
+		Apple:  &auth.Apple{BundleIDs: []string{"com.example.app"}}, // native iOS sign-in only
 	},
 }
 ```
 
 - **A nil provider is turned off.** Starting a flow for it answers `422` with `provider: invalid_value`, since the provider is a body field rather than part of the path.
-- **Secrets come from Railway variables,** like every other secret. The module builds Apple's client secret, a short-lived JWT signed with the `.p8` key, itself.
+- **Secrets come from Railway variables,** like every other secret. Apple needs none: native sign-in only checks Apple's signed token.
 - **Providers redirect to the web app,** at `{AppURL}/oauth/callback` and `{AppURL}/oauth/callback/mobile`, which are registered with each provider. The Go API isn't public, so it can't receive the redirect itself. Step 9's Next.js template provides both pages.
 - **The mobile app's deep link is the web app's setting,** not the Go API's: only the mobile callback page uses it. So `Config.OAuth` has no `MobileRedirectURL`.
 
@@ -944,7 +938,6 @@ POST /v1/oauth-flows/complete
   The client verifier blocks both, because only the device that started the flow has it.
 - **A flow works once, for 10 minutes.** Its PKCE verifier is stored encrypted with `EncryptionKey`.
 - **The flow is spent before the provider is called,** so it can't be finished twice even if that call fails. A wrong client verifier doesn't spend it, so a stray request can't cancel the real device's sign-in.
-- **Apple on the web posts its response** (`response_mode=form_post`) when email is requested. The callback page accepts `POST` as well as `GET`.
 
 ### Sign in with Apple on iOS (Decision)
 
@@ -952,12 +945,15 @@ On iOS, the native Apple sheet (`expo-apple-authentication`) is what users and A
 
 ```json
 POST /v1/apple-sign-ins
-{ "identity_token": "eyJ…", "nonce": "…", "client": "mobile" }
+{ "identity_token": "eyJ…", "nonce": "…" }
 → 201, the usual login response, or 200 with a 2FA challenge
 ```
 
-- **The token is checked against Apple's published keys:** issuer, audience (one of `BundleIDs`), expiry, and the nonce the app generated.
-- **Android and the web use the redirect flow above** with Apple, like any other provider.
+- **The token is checked against Apple's published keys:** issuer, audience (one of `BundleIDs`), expiry, and the nonce.
+- **The nonce:** the app generates a random nonce, gives Apple its hex SHA-256, and sends the nonce itself here. The token carries only the hash, so someone holding just the token can't use it.
+- **The session is always a `mobile` one,** so the body has no `client`.
+- **Apple is iOS only: no web or Android sign-in** (confirmed in review on 2026-10-29). Apple's sign-in API doesn't document PKCE, which the auth standard requires, and Apple only requires its sign-in on iOS. Someone who signed up with Apple on an iPhone uses a password on the web: a password reset sends them a link, through Apple's relay if they hid their address.
+- **Linking Apple from settings isn't offered.** A first Apple sign-in links by verified email like any provider; with Hide My Email the address won't match, so it makes a new account. Unlinking Apple works as for any provider.
 - **Checking signed tokens needs a JWT library.** Google's and Apple's ID tokens from the redirect flow are checked the same way. I'd use `github.com/coreos/go-oidc/v3`, the standard Go OpenID Connect library, rather than write signature checking ourselves. It's the one new dependency besides `golang.org/x/oauth2` (planned in design.md).
 
 ### Who gets logged in (Decision)
@@ -1042,7 +1038,7 @@ auth.oauth_flows      id, state_hash, provider, purpose (login|link), user_id (l
 
 1. Schema, the flow endpoints, Google and GitHub on web and mobile, the matching rules, and 2FA and session rules at the end.
 2. Linking, unlinking, the account list, notices, and `password_not_set`.
-3. Apple: the redirect flow, the client-secret JWT, and native iOS sign-in.
+3. Apple: native iOS sign-in.
 
 ### Decisions
 
@@ -1050,7 +1046,7 @@ Confirmed in review on 2026-10-29:
 
 1. **One redirect flow for web and mobile, run by the Go API,** with the callback on web app pages and a mobile page that hands off to the app's deep link.
 2. **A client verifier on top of `state` and PKCE,** so only the device that started a flow can finish it.
-3. **Native Sign in with Apple on iOS** through `POST /v1/apple-sign-ins`, with `go-oidc` as a new dependency for checking signed tokens.
+3. **Native Sign in with Apple on iOS** through `POST /v1/apple-sign-ins`, with `go-oidc` as a new dependency for checking signed tokens. Later narrowed to iOS only, with no Apple redirect flow (see above).
 4. **The matching rules:**
    - Link by provider user ID first.
    - Link to an existing account only for a provider-verified email.

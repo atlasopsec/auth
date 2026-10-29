@@ -8,6 +8,9 @@ package oauth
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -243,6 +246,91 @@ func (g *github) get(ctx context.Context, accessToken, path string, v any) error
 	}
 	if err := json.NewDecoder(io.LimitReader(res.Body, maxResponse)).Decode(v); err != nil {
 		return fmt.Errorf("oauth: github: decoding %s: %w", path, err)
+	}
+	return nil
+}
+
+// AppleEndpoints are where Apple's keys live, and the issuer its tokens
+// name. Tests point them at a fake.
+type AppleEndpoints struct {
+	JWKSURL string
+	Issuer  string
+}
+
+// DefaultAppleEndpoints returns Apple's real endpoints.
+func DefaultAppleEndpoints() AppleEndpoints {
+	return AppleEndpoints{JWKSURL: "https://appleid.apple.com/auth/keys", Issuer: "https://appleid.apple.com"}
+}
+
+// Apple checks the identity tokens of native Sign in with Apple on iOS.
+// There's no redirect or code exchange: the app gets the signed token from
+// the system sheet and sends it to the API.
+type Apple struct {
+	verifier  *oidc.IDTokenVerifier
+	issuer    string
+	bundleIDs []string
+}
+
+// NewApple returns a checker for tokens issued to any of bundleIDs. now is
+// the clock for the token's expiry check.
+func NewApple(bundleIDs []string, e AppleEndpoints, now func() time.Time) *Apple {
+	client := &http.Client{Timeout: timeout}
+	keys := oidc.NewRemoteKeySet(oidc.ClientContext(context.Background(), client), e.JWKSURL)
+	return &Apple{
+		// The audience is checked below, against every bundle ID.
+		verifier:  oidc.NewVerifier(e.Issuer, keys, &oidc.Config{SkipClientIDCheck: true, Now: now}),
+		issuer:    e.Issuer,
+		bundleIDs: append([]string(nil), bundleIDs...),
+	}
+}
+
+// Verify checks an identity token from the native sheet and returns the
+// identity in it. The app gives Apple the hex SHA-256 of a random nonce,
+// and sends the nonce itself here, so a token on its own can't be replayed
+// by someone who doesn't have the nonce.
+func (a *Apple) Verify(ctx context.Context, rawToken, nonce string) (Identity, error) {
+	idTok, err := a.verifier.Verify(ctx, rawToken)
+	if err != nil {
+		return Identity{}, fmt.Errorf("oauth: apple: verifying identity token: %w", err)
+	}
+	audOK := false
+	for _, aud := range idTok.Audience {
+		for _, id := range a.bundleIDs {
+			audOK = audOK || aud == id
+		}
+	}
+	if !audOK {
+		return Identity{}, fmt.Errorf("oauth: apple: token audience %v isn't a configured bundle ID", idTok.Audience)
+	}
+	sum := sha256.Sum256([]byte(nonce))
+	if nonce == "" || subtle.ConstantTimeCompare([]byte(idTok.Nonce), []byte(hex.EncodeToString(sum[:]))) != 1 {
+		return Identity{}, errors.New("oauth: apple: token nonce doesn't match")
+	}
+	var claims struct {
+		Email         string   `json:"email"`
+		EmailVerified flexBool `json:"email_verified"`
+	}
+	if err := idTok.Claims(&claims); err != nil {
+		return Identity{}, fmt.Errorf("oauth: apple: reading claims: %w", err)
+	}
+	if idTok.Subject == "" {
+		return Identity{}, errors.New("oauth: apple: token has no subject")
+	}
+	return Identity{Subject: idTok.Subject, Email: claims.Email, EmailVerified: bool(claims.EmailVerified)}, nil
+}
+
+// flexBool reads a JSON boolean that Apple sends either as true or as the
+// string "true".
+type flexBool bool
+
+func (b *flexBool) UnmarshalJSON(data []byte) error {
+	switch string(data) {
+	case `true`, `"true"`:
+		*b = true
+	case `false`, `"false"`, `null`:
+		*b = false
+	default:
+		return fmt.Errorf("oauth: %s isn't a boolean", data)
 	}
 	return nil
 }

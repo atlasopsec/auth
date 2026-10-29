@@ -310,3 +310,84 @@ func (g *GitHub) Authorize(authURL string, u GitHubUser) (code, state string) {
 	g.s.t.Helper()
 	return g.s.authorize(authURL, grant{github: &u})
 }
+
+// BundleID is the iOS bundle ID the fake Apple issues tokens for.
+const BundleID = "com.example.app"
+
+// AppleIssuer is the iss claim the fake Apple signs.
+const AppleIssuer = "https://appleid.apple.com"
+
+// Apple is a fake Apple: it publishes a signing key, and signs identity
+// tokens like the native Sign in with Apple sheet returns.
+type Apple struct {
+	t        *testing.T
+	srv      *httptest.Server
+	Now      func() time.Time
+	key      *rsa.PrivateKey
+	otherKey *rsa.PrivateKey
+}
+
+// NewApple starts a fake Apple, stopped when the test ends.
+func NewApple(t *testing.T, now func() time.Time) *Apple {
+	t.Helper()
+	a := &Apple{t: t, Now: now, key: newKey(t), otherKey: newKey(t)}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /auth/keys", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, map[string]any{"keys": []any{map[string]string{
+			"kty": "RSA", "kid": "test", "use": "sig", "alg": "RS256",
+			"n": base64.RawURLEncoding.EncodeToString(a.key.N.Bytes()),
+			"e": base64.RawURLEncoding.EncodeToString(big.NewInt(int64(a.key.E)).Bytes()),
+		}}})
+	})
+	a.srv = httptest.NewServer(mux)
+	t.Cleanup(a.srv.Close)
+	return a
+}
+
+// Endpoints points the real Apple checker at the fake.
+func (a *Apple) Endpoints() oauth.AppleEndpoints {
+	return oauth.AppleEndpoints{JWKSURL: a.srv.URL + "/auth/keys", Issuer: AppleIssuer}
+}
+
+// AppleUser is who signs in on the fake Apple sheet.
+type AppleUser struct {
+	Subject string
+	Email   string
+	// EmailVerified is sent as the string "true" or "false", as Apple
+	// often does.
+	EmailVerified bool
+	// Claims override the token's claims. A nil value removes the claim.
+	Claims map[string]any
+	// WrongKey signs the token with a key that isn't published.
+	WrongKey bool
+}
+
+// IdentityToken signs the token the native sheet would return to an app
+// that gave Apple the hex SHA-256 of nonce.
+func (a *Apple) IdentityToken(u AppleUser, nonce string) string {
+	a.t.Helper()
+	now := a.Now()
+	sum := sha256.Sum256([]byte(nonce))
+	claims := map[string]any{
+		"iss":            AppleIssuer,
+		"aud":            BundleID,
+		"iat":            now.Unix(),
+		"exp":            now.Add(10 * time.Minute).Unix(),
+		"sub":            u.Subject,
+		"email":          u.Email,
+		"email_verified": fmt.Sprint(u.EmailVerified),
+		"nonce":          fmt.Sprintf("%x", sum),
+	}
+	for k, v := range u.Claims {
+		if v == nil {
+			delete(claims, k)
+		} else {
+			claims[k] = v
+		}
+	}
+	key := a.key
+	if u.WrongKey {
+		key = a.otherKey
+	}
+	return sign(a.t, key, claims)
+}

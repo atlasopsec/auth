@@ -30,6 +30,9 @@ import (
 type OAuth struct {
 	Google *Google
 	GitHub *GitHub
+	// Apple turns on native Sign in with Apple in the iOS app. Apple isn't
+	// offered on the web or Android.
+	Apple *Apple
 }
 
 // Google is a Google OAuth client, of type "Web application".
@@ -48,10 +51,18 @@ type GitHub struct {
 	ClientSecret string
 }
 
+// Apple is native Sign in with Apple, for the iOS app.
+type Apple struct {
+	// BundleIDs are the iOS apps' bundle IDs, such as "com.example.app".
+	// Identity tokens issued to any other app are refused.
+	BundleIDs []string
+}
+
 // Provider names, as used in the API.
 const (
 	providerGoogle = "google"
 	providerGitHub = "github"
+	providerApple  = "apple"
 )
 
 // oauthFlowLifetime is how long a user has to finish signing in at the
@@ -79,6 +90,7 @@ func newProviders(cfg OAuth, now func() time.Time) (map[string]oauth.Provider, e
 func (a *Auth) registerOAuth(mux *http.ServeMux) {
 	mux.Handle("POST /v1/oauth-flows", endpoint(http.HandlerFunc(a.startOAuthFlow)))
 	mux.Handle("POST /v1/oauth-flows/complete", endpoint(http.HandlerFunc(a.completeOAuthFlow)))
+	mux.Handle("POST /v1/apple-sign-ins", endpoint(http.HandlerFunc(a.appleSignIn)))
 	mux.Handle("GET /v1/users/me/oauth-accounts", endpoint(a.Authenticated(http.HandlerFunc(a.listOAuthAccounts))))
 	mux.Handle("POST /v1/users/me/oauth-accounts", endpoint(a.Authenticated(http.HandlerFunc(a.startLink))))
 	mux.Handle("DELETE /v1/users/me/oauth-accounts/{id}", endpoint(a.Authenticated(http.HandlerFunc(a.unlink))))
@@ -241,11 +253,17 @@ func (a *Auth) completeOAuthFlow(w http.ResponseWriter, r *http.Request) {
 		a.writeOAuthError(w, r, err)
 		return
 	}
+	a.writeOAuthLogin(w, r, flow.Provider, res)
+}
+
+// writeOAuthLogin logs what a provider login did to the account, and
+// answers with the session or the 2FA challenge.
+func (a *Auth) writeOAuthLogin(w http.ResponseWriter, r *http.Request, provider string, res oauthResult) {
 	switch {
 	case res.created:
-		a.logEvent(r, "auth: user signed up with "+flow.Provider, res.user.ID)
+		a.logEvent(r, "auth: user signed up with "+provider, res.user.ID)
 	case res.linked:
-		a.logEvent(r, "auth: "+flow.Provider+" linked by verified email", res.user.ID)
+		a.logEvent(r, "auth: "+provider+" linked by verified email", res.user.ID)
 	}
 	if res.tookBack {
 		a.logEvent(r, "auth: unverified account taken back by its email's owner", res.user.ID)
@@ -255,7 +273,7 @@ func (a *Auth) completeOAuthFlow(w http.ResponseWriter, r *http.Request) {
 		writeChallengeJSON(w, r, res.challenge, res.expires)
 		return
 	}
-	a.logEvent(r, "auth: user logged in with "+flow.Provider, res.user.ID)
+	a.logEvent(r, "auth: user logged in with "+provider, res.user.ID)
 	httpapi.WriteJSON(w, r, http.StatusCreated, loginResponse{User: toUserJSON(userFromRow(res.user)), Token: res.token, ExpiresAt: timestamp(res.expires)})
 }
 

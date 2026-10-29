@@ -24,22 +24,26 @@ type oauthFixture struct {
 	accessFixture
 	google *oauthtest.Google
 	github *oauthtest.GitHub
+	apple  *oauthtest.Apple
 }
 
-// setupOAuth returns the access fixture with Google and GitHub sign-in,
-// pointed at fakes.
+// setupOAuth returns the access fixture with Google, GitHub, and Apple
+// sign-in, pointed at fakes.
 func setupOAuth(t *testing.T, cfg Config) oauthFixture {
 	t.Helper()
 	cfg.OrgRoles, cfg.AppRoles = testOrgRoles, testAppRoles
 	cfg.OAuth = OAuth{
 		Google: &Google{ClientID: oauthtest.ClientID, ClientSecret: oauthtest.ClientSecret},
 		GitHub: &GitHub{ClientID: oauthtest.ClientID, ClientSecret: oauthtest.ClientSecret},
+		Apple:  &Apple{BundleIDs: []string{oauthtest.BundleID}},
 	}
 	f := oauthFixture{accessFixture: setupAccessWith(t, cfg)}
 	f.google = oauthtest.NewGoogle(t, f.clock.now)
 	f.github = oauthtest.NewGitHub(t)
 	f.auth.providers[providerGoogle] = oauth.NewGoogle(oauthtest.ClientID, oauthtest.ClientSecret, f.google.Endpoints(), f.clock.now)
 	f.auth.providers[providerGitHub] = oauth.NewGitHub(oauthtest.ClientID, oauthtest.ClientSecret, f.github.Endpoints())
+	f.apple = oauthtest.NewApple(t, f.clock.now)
+	f.auth.apple = oauth.NewApple([]string{oauthtest.BundleID}, f.apple.Endpoints(), f.clock.now)
 	return f
 }
 

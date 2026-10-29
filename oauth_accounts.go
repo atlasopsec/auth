@@ -22,6 +22,7 @@ import (
 var providerNames = map[string]string{
 	providerGoogle: "Google",
 	providerGitHub: "GitHub",
+	providerApple:  "Apple",
 }
 
 type oauthAccountJSON struct {
