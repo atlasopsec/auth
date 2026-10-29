@@ -25,8 +25,15 @@ func wantRateLimited(t *testing.T, what string, res response) {
 func TestLoginRateLimit(t *testing.T) {
 	t.Parallel()
 	f := setupOAuth(t, Config{})
+	// Each login is for a different email, so the per-account delays
+	// (login_failures_test.go) stay out of the way.
+	n := 0
+	wrongLogin := func() string {
+		n++
+		return credentials(fmt.Sprintf("user%d@example.com", n), "not my password", "web")
+	}
 	routes := []struct{ path, body string }{
-		{"/v1/sessions", credentials(testEmail, "not my password", "web")},
+		{"/v1/sessions", ""},
 		{"/v1/email-verifications/confirm", `{"token":"x","password":"y","client":"web"}`},
 		{"/v1/password-resets/confirm", resetBody("x", newPassword)},
 		{"/v1/two-factor-challenges/verify", verifyBody(token.New(), "123456")},
@@ -35,29 +42,35 @@ func TestLoginRateLimit(t *testing.T) {
 	}
 	for _, route := range routes {
 		ip := nextTestIP()
+		body := func(r struct{ path, body string }) string {
+			if r.body == "" {
+				return wrongLogin()
+			}
+			return r.body
+		}
 		for i := range limitLogin.Limit {
-			if res := f.do(t, http.MethodPost, route.path, route.body, fromIP(ip)); res.status == http.StatusTooManyRequests {
+			if res := f.do(t, http.MethodPost, route.path, body(route), fromIP(ip)); res.status == http.StatusTooManyRequests {
 				t.Fatalf("%s: request %d limited, want %d allowed", route.path, i+1, limitLogin.Limit)
 			}
 		}
-		wantRateLimited(t, route.path+" over the limit", f.do(t, http.MethodPost, route.path, route.body, fromIP(ip)))
+		wantRateLimited(t, route.path+" over the limit", f.do(t, http.MethodPost, route.path, body(route), fromIP(ip)))
 		// They share the limit.
 		other := routes[0]
 		if route.path == other.path {
 			other = routes[1]
 		}
-		wantRateLimited(t, route.path+" then "+other.path, f.do(t, http.MethodPost, other.path, other.body, fromIP(ip)))
-		if res := f.do(t, http.MethodPost, route.path, route.body, fromIP(nextTestIP())); res.status == http.StatusTooManyRequests {
+		wantRateLimited(t, route.path+" then "+other.path, f.do(t, http.MethodPost, other.path, body(other), fromIP(ip)))
+		if res := f.do(t, http.MethodPost, route.path, body(route), fromIP(nextTestIP())); res.status == http.StatusTooManyRequests {
 			t.Errorf("%s: another IP was limited", route.path)
 		}
 	}
 
 	ip := nextTestIP()
 	for range limitLogin.Limit + 1 {
-		f.do(t, http.MethodPost, "/v1/sessions", credentials(testEmail, "x", "web"), fromIP(ip))
+		f.do(t, http.MethodPost, "/v1/sessions", wrongLogin(), fromIP(ip))
 	}
 	f.clock.advance(limitLogin.Window)
-	if res := f.do(t, http.MethodPost, "/v1/sessions", credentials(testEmail, "x", "web"), fromIP(ip)); res.status == http.StatusTooManyRequests {
+	if res := f.do(t, http.MethodPost, "/v1/sessions", wrongLogin(), fromIP(ip)); res.status == http.StatusTooManyRequests {
 		t.Error("still limited in the next window")
 	}
 }

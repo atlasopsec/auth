@@ -32,6 +32,9 @@ func (a *Auth) Cleanup(ctx context.Context) error {
 		{"2FA failures", func() (int64, error) { return a.q.DeleteTwoFactorFailuresBefore(ctx, now.Add(-guessWindow)) }},
 		{"OAuth flows", func() (int64, error) { return a.q.DeleteSpentOAuthFlows(ctx, now) }},
 		{"rate limits", func() (int64, error) { return a.limiter.DeleteEnded(ctx) }},
+		{"login failures", func() (int64, error) {
+			return a.q.DeleteOldLoginFailures(ctx, db.DeleteOldLoginFailuresParams{ResetBefore: now.Add(-loginFailureReset), Now: now})
+		}},
 	} {
 		n, err := step.del()
 		if err != nil {

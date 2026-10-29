@@ -71,6 +71,11 @@ paths:
       description: >
         Unknown emails, wrong passwords, and accounts without a password
         all get the same `invalid_credentials` response, in the same time.
+        After 5 wrong passwords for an email from one IP, or 20 from
+        anywhere within an hour, each further failure makes the next
+        attempt wait, from 1 second doubling to 15 minutes; an attempt that
+        comes too early gets `429` without the password being checked.
+        Unknown emails are slowed down the same way.
         For a user with 2FA, a correct password returns a challenge instead
         of a session; finish with `POST /v1/two-factor-challenges/verify`.
       tags: [sessions]
@@ -301,6 +306,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+        "429": { $ref: "#/components/responses/RateLimited" }
         "500": { $ref: "#/components/responses/InternalError" }
 
   /v1/email-changes:
@@ -721,6 +727,7 @@ paths:
         "401": { $ref: "#/components/responses/Unauthenticated" }
         "409": { $ref: "#/components/responses/TwoFactorConflict" }
         "422": { $ref: "#/components/responses/ValidationFailed" }
+        "429": { $ref: "#/components/responses/RateLimited" }
         "500": { $ref: "#/components/responses/InternalError" }
     delete:
       operationId: disableTwoFactor
@@ -747,6 +754,7 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
         "409": { $ref: "#/components/responses/TwoFactorConflict" }
         "422": { $ref: "#/components/responses/ValidationFailed" }
+        "429": { $ref: "#/components/responses/RateLimited" }
         "500": { $ref: "#/components/responses/InternalError" }
 
   /v1/users/me/two-factor/confirm:
@@ -793,6 +801,7 @@ paths:
         "403": { $ref: "#/components/responses/TwoFactorSetupRequired" }
         "409": { $ref: "#/components/responses/TwoFactorConflict" }
         "422": { $ref: "#/components/responses/ValidationFailed" }
+        "429": { $ref: "#/components/responses/RateLimited" }
         "500": { $ref: "#/components/responses/InternalError" }
 
   /v1/oauth-flows:
@@ -1059,6 +1068,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
         "422": { $ref: "#/components/responses/ValidationFailed" }
+        "429": { $ref: "#/components/responses/RateLimited" }
         "500": { $ref: "#/components/responses/InternalError" }
 
   /v1/two-factor-challenges/verify:
@@ -1377,8 +1387,10 @@ components:
     RateLimited:
       description: >
         `rate_limited`: too many requests from this IP or to this address,
-        or too many wrong 2FA codes (10 in 15 minutes pause a user's code
-        checks). Try again after `Retry-After` seconds. See docs/api.md §10 for the limits.
+        too many wrong 2FA codes (10 in 15 minutes pause a user's code
+        checks), a login attempt that came before the delay after repeated
+        failures was over, or 10 wrong current passwords in an hour on the
+        logged-in endpoints. Try again after `Retry-After` seconds. See docs/api.md §10 for the limits.
       headers:
         Retry-After:
           schema: { type: integer }
