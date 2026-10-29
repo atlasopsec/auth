@@ -251,6 +251,12 @@ func New(cfg Config) (*Auth, error) {
 	if a.emails.TwoFactorGuessing == nil {
 		a.emails.TwoFactorGuessing = defaultTwoFactorGuessing
 	}
+	if a.emails.OAuthLinked == nil {
+		a.emails.OAuthLinked = defaultOAuthLinked
+	}
+	if a.emails.OAuthUnlinked == nil {
+		a.emails.OAuthUnlinked = defaultOAuthUnlinked
+	}
 	if !cfg.DisableBreachCheck {
 		a.breach = pwned.New(pwned.DefaultURL)
 	}

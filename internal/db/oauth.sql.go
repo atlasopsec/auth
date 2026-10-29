@@ -26,6 +26,17 @@ func (q *Queries) ClearPassword(ctx context.Context, arg ClearPasswordParams) er
 	return err
 }
 
+const countOAuthAccounts = `-- name: CountOAuthAccounts :one
+SELECT count(*) FROM auth.oauth_accounts WHERE user_id = $1
+`
+
+func (q *Queries) CountOAuthAccounts(ctx context.Context, userID uuid.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countOAuthAccounts, userID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createOAuthAccount = `-- name: CreateOAuthAccount :exec
 INSERT INTO auth.oauth_accounts (id, user_id, provider, provider_user_id, email, created_at, updated_at)
 VALUES ($1, $2, $3, $4, $5, $6, $6)
@@ -91,6 +102,22 @@ func (q *Queries) CreateOAuthFlow(ctx context.Context, arg CreateOAuthFlowParams
 		arg.Now,
 	)
 	return err
+}
+
+const deleteOAuthAccount = `-- name: DeleteOAuthAccount :one
+DELETE FROM auth.oauth_accounts WHERE id = $1 AND user_id = $2 RETURNING provider
+`
+
+type DeleteOAuthAccountParams struct {
+	ID     uuid.UUID
+	UserID uuid.UUID
+}
+
+func (q *Queries) DeleteOAuthAccount(ctx context.Context, arg DeleteOAuthAccountParams) (string, error) {
+	row := q.db.QueryRow(ctx, deleteOAuthAccount, arg.ID, arg.UserID)
+	var provider string
+	err := row.Scan(&provider)
+	return provider, err
 }
 
 const deleteSpentOAuthFlows = `-- name: DeleteSpentOAuthFlows :exec
@@ -173,6 +200,38 @@ func (q *Queries) GetUserByEmailForUpdate(ctx context.Context, email string) (Au
 	return i, err
 }
 
+const listOAuthAccounts = `-- name: ListOAuthAccounts :many
+SELECT id, user_id, provider, provider_user_id, email, created_at, updated_at FROM auth.oauth_accounts WHERE user_id = $1 ORDER BY created_at, id
+`
+
+func (q *Queries) ListOAuthAccounts(ctx context.Context, userID uuid.UUID) ([]AuthOauthAccount, error) {
+	rows, err := q.db.Query(ctx, listOAuthAccounts, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AuthOauthAccount
+	for rows.Next() {
+		var i AuthOauthAccount
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.Provider,
+			&i.ProviderUserID,
+			&i.Email,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const useOAuthFlow = `-- name: UseOAuthFlow :exec
 UPDATE auth.oauth_flows SET used_at = $1, updated_at = $1 WHERE id = $2
 `
@@ -185,4 +244,20 @@ type UseOAuthFlowParams struct {
 func (q *Queries) UseOAuthFlow(ctx context.Context, arg UseOAuthFlowParams) error {
 	_, err := q.db.Exec(ctx, useOAuthFlow, arg.Now, arg.ID)
 	return err
+}
+
+const userHasOAuthProvider = `-- name: UserHasOAuthProvider :one
+SELECT EXISTS (SELECT 1 FROM auth.oauth_accounts WHERE user_id = $1 AND provider = $2)
+`
+
+type UserHasOAuthProviderParams struct {
+	UserID   uuid.UUID
+	Provider string
+}
+
+func (q *Queries) UserHasOAuthProvider(ctx context.Context, arg UserHasOAuthProviderParams) (bool, error) {
+	row := q.db.QueryRow(ctx, userHasOAuthProvider, arg.UserID, arg.Provider)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
 }

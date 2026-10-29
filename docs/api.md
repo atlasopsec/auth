@@ -991,7 +991,8 @@ Then, like every other way in:
 - **Linking needs the current password, if the account has one.** Linking adds a way in, and it's how someone with a stolen session would make their access last. That's the same rule as other account-security changes.
 - **Accounts without a password** (OAuth only) link and unlink with their session alone. The only other proof they could give is another provider round trip, which adds a lot of flow for little gain. The notices below cover them.
 - **A provider account already linked to another user** returns `409 oauth_account_in_use`. Accounts are never moved silently.
-- **One account per provider per user.**
+- **One account per provider per user.** Trying a second answers `409 oauth_already_linked`.
+- **Linking doesn't need a verified provider email.** The user is logged in and asked for it, and the account is matched by provider user ID from then on. The provider's address is kept only to show in settings, and may be empty.
 - **Linking finishes only with the same user's session,** and that user's flow.
 - **Notices:** the user is emailed when a provider is linked or unlinked, with new `Emails` templates `OAuthLinked` and `OAuthUnlinked`.
 
@@ -999,7 +1000,7 @@ Then, like every other way in:
 
 Setting up or turning off 2FA, changing the password, and linking all need `current_password`. Today an OAuth-only account just gets `current_password: incorrect`, which is confusing.
 
-These endpoints will answer `409 password_not_set` instead, and the app can offer "set a password" through the existing reset flow, which already adds a password to OAuth-only accounts (§6). That's an additive change: a new error code on existing endpoints.
+These endpoints (starting 2FA setup, turning 2FA off, regenerating recovery codes, changing the password, and changing the email) answer `409 password_not_set` instead, and the app can offer "set a password" through the existing reset flow, which already adds a password to OAuth-only accounts (§6). That's an additive change: a new error code on existing endpoints.
 
 ### Database
 
@@ -1024,6 +1025,7 @@ auth.oauth_flows      id, state_hash, provider, purpose (login|link), user_id (l
 | `oauth_failed` | 401 | The flow is unknown, used, or expired; the client verifier doesn't match; or the provider refused the code or token. Already listed in design.md |
 | `oauth_email_not_verified` | 403 | The provider doesn't vouch for the email, and no account is linked yet |
 | `oauth_account_in_use` | 409 | Linking a provider account that belongs to another user |
+| `oauth_already_linked` | 409 | Linking a second account with a provider the user already linked (one per provider) |
 | `last_login_method` | 409 | Unlinking the only way left to log in |
 | `password_not_set` | 409 | An endpoint needs the current password, but the account has none |
 

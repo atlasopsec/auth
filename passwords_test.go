@@ -327,9 +327,7 @@ func TestChangePasswordWithoutCurrentPassword(t *testing.T) {
 		t.Fatal(err)
 	}
 	res := f.do(t, http.MethodPost, "/v1/users/me/password", changeBody("anything at all", newPassword), withToken(l.Token))
-	if res.status != http.StatusUnprocessableEntity || !strings.Contains(string(res.body), `"incorrect"`) {
-		t.Errorf("status %d, body %s; want 422 current_password incorrect", res.status, res.body)
-	}
+	wantError(t, "changing password", res, 409, "password_not_set")
 	if f.passwordHash(t, testEmail) != nil {
 		t.Error("a password was set without a reset")
 	}

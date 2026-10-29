@@ -32,16 +32,20 @@ func (a *Auth) twoFactorStatus(ctx context.Context, userID uuid.UUID) (twoFactor
 	return s, err
 }
 
-// checkPassword verifies a user's current password. Accounts without one
-// (OAuth only) never match, after the same work as a real check.
+// errPasswordNotSet means an account has no password: it signs in only
+// with OAuth.
+var errPasswordNotSet = errors.New("account has no password")
+
+// checkPassword verifies a user's current password. It returns
+// errPasswordNotSet for an account without one. The user is logged in, so
+// that reveals nothing they don't know.
 func (a *Auth) checkPassword(ctx context.Context, userID uuid.UUID, pw string) (bool, error) {
 	row, err := a.q.GetUserByID(ctx, userID)
 	if err != nil {
 		return false, fmt.Errorf("reading user: %w", err)
 	}
 	if row.PasswordHash == nil {
-		password.SimulateVerify(pw)
-		return false, nil
+		return false, errPasswordNotSet
 	}
 	ok, err := password.Verify(pw, *row.PasswordHash)
 	if err != nil {
@@ -118,18 +122,15 @@ func (a *Auth) startTwoFactor(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteDecodeError(w, r, err)
 		return
 	}
+	if !a.requirePassword(w, r, c.user.ID) {
+		return
+	}
 	if req.CurrentPassword == "" {
 		writeValidationFailed(w, r, []httpapi.FieldError{currentPasswordRequired})
 		return
 	}
 	ctx := r.Context()
-	ok, err := a.checkPassword(ctx, c.user.ID, req.CurrentPassword)
-	if err != nil {
-		httpapi.WriteInternalError(w, r, a.log, err)
-		return
-	}
-	if !ok {
-		writeValidationFailed(w, r, []httpapi.FieldError{currentPasswordIncorrect})
+	if !a.passwordChecked(w, r, c.user.ID, req.CurrentPassword) {
 		return
 	}
 
@@ -225,6 +226,9 @@ func (a *Auth) decodePasswordAndCode(w http.ResponseWriter, r *http.Request, use
 		httpapi.WriteDecodeError(w, r, err)
 		return req, false
 	}
+	if !a.requirePassword(w, r, userID) {
+		return req, false
+	}
 	var details []httpapi.FieldError
 	if req.CurrentPassword == "" {
 		details = append(details, currentPasswordRequired)
@@ -236,16 +240,7 @@ func (a *Auth) decodePasswordAndCode(w http.ResponseWriter, r *http.Request, use
 		writeValidationFailed(w, r, details)
 		return req, false
 	}
-	ok, err := a.checkPassword(r.Context(), userID, req.CurrentPassword)
-	if err != nil {
-		httpapi.WriteInternalError(w, r, a.log, err)
-		return req, false
-	}
-	if !ok {
-		writeValidationFailed(w, r, []httpapi.FieldError{currentPasswordIncorrect})
-		return req, false
-	}
-	return req, true
+	return req, a.passwordChecked(w, r, userID, req.CurrentPassword)
 }
 
 var errTwoFactorRequired = errors.New("two-factor authentication is required")

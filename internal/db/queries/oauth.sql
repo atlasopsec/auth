@@ -31,3 +31,15 @@ SELECT * FROM auth.users WHERE lower(email) = lower(@email) FOR UPDATE;
 
 -- name: ClearPassword :exec
 UPDATE auth.users SET password_hash = NULL, updated_at = @now WHERE id = @id;
+
+-- name: ListOAuthAccounts :many
+SELECT * FROM auth.oauth_accounts WHERE user_id = @user_id ORDER BY created_at, id;
+
+-- name: UserHasOAuthProvider :one
+SELECT EXISTS (SELECT 1 FROM auth.oauth_accounts WHERE user_id = @user_id AND provider = @provider);
+
+-- name: DeleteOAuthAccount :one
+DELETE FROM auth.oauth_accounts WHERE id = @id AND user_id = @user_id RETURNING provider;
+
+-- name: CountOAuthAccounts :one
+SELECT count(*) FROM auth.oauth_accounts WHERE user_id = @user_id;
