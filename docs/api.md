@@ -2,7 +2,7 @@
 
 The module's public Go API and the HTTP endpoints it serves.
 
-> **Status:** §1–8 cover build steps 3–6 (approved and built). §9 covers build step 7 (OAuth), approved and being built. Sections marked **(Decision)** were confirmed in review. Later steps add to this but don't change what's here.
+> **Status:** §1–9 cover build steps 3–7 (approved and built). §10 covers build step 8 (rate limiting and the event log) and is a draft for review. Sections marked **(Decision)** in §1–9 were confirmed in review. Later steps add to this but don't change what's here.
 
 Once a name below is released, changing or removing it is a breaking change (a new major version), so this is the moment to get it right.
 
@@ -1055,3 +1055,126 @@ Confirmed in review on 2026-10-29:
    - Store no names.
 5. **Linking needs the current password when the account has one.** Linking and unlinking send notices, and the last login method can't be removed.
 6. **`409 password_not_set`** for OAuth-only accounts on endpoints that need a password.
+
+---
+
+## 10. Step 8: rate limiting and the security event log
+
+> **Status: draft for review.** Sections marked **(Decision)** need confirming.
+
+Step 8 adds the [auth standard](https://github.com/jakefrenzel/engineering-standards/blob/main/standards/auth.md)'s §9 and §10:
+- **Rate limits:** on logins per account and per IP, password resets, 2FA attempts, and sign-ups.
+- **Growing delays instead of lockouts:** repeated failed logins slow down further attempts, but never lock the account.
+- **An `auth_events` table:** logins, logouts, password, 2FA, OAuth, and role changes, without secrets.
+- **Optional: an email on login from a new device.** The standard says SHOULD.
+
+It also replaces §4's "no rate limiting until step 8" warning. The step 4 and 6 stopgaps stay (§6 and §8): the 60-second email cooldown and the 2FA guessing limit are per account, so they still add something per-IP limits don't.
+
+### Where limits live (Decision)
+
+In Postgres, as design.md planned, in one small table:
+
+```
+auth.rate_limits   key, window_start, count      primary key (key, window_start)
+```
+
+- **One statement per check:** `INSERT … ON CONFLICT DO UPDATE SET count = count + 1 RETURNING count`. It's atomic, so concurrent requests can't slip past, and it works across several API instances on Railway without Redis.
+- **Fixed windows:** a limit of "10 per hour" counts per clock hour. At the edge of two windows, up to twice the limit can get through in a short burst. That's the usual trade for a single statement, and fine for these numbers.
+- **Keys** name the limit and what's counted, e.g. `login:ip:203.0.113.0`. Emails in keys are stored as SHA-256 hashes, so the table holds no addresses.
+- **Old windows** are deleted by the cleanup job below.
+
+### Which limits (Decision)
+
+Every limit answers `429 rate_limited` with `Retry-After`, the code §8 already added.
+
+| What | Counted per | Limit |
+|---|---|---|
+| Login attempts (`POST /v1/sessions`, the verification link, 2FA challenge codes, OAuth completion, Apple sign-in) | IP | 30 per 10 minutes |
+| Sign-ups | IP | 10 per hour |
+| Emails to an address (verification, password reset, email change, invitation) | IP | 10 per hour |
+| | Address | 10 per day, on top of the 60-second cooldown |
+| Starting OAuth flows | IP | 30 per 10 minutes |
+| Wrong 2FA codes | IP | 30 per hour, on top of §8's per-user limit |
+| Wrong current passwords on logged-in endpoints (2FA setup, password change, email change, linking) | User | 10 per hour |
+
+- **Per IP, generously:** offices and mobile carriers put many people behind one address, so per-IP limits stop scripts, not crowds.
+- **IPv6 is counted per `/64`,** since one device can use many addresses in its block. IPv4 counts per address.
+- **The IP is the client's,** from `X-Forwarded-For` through `Config.TrustedProxies` (§3).
+- **No configuration at first.** These are defaults every project gets; knobs can be added later if one needs different numbers.
+- **The last row** covers a gap left in step 6, where a stolen session plus repeated password guesses on the logged-in endpoints had no limit.
+
+### Failed logins slow down, never lock (Decision)
+
+The standard: "slow down further attempts (growing delays) instead of locking the account outright, since a hard lock lets anyone lock a user out."
+
+- **Per account and IP:** after **5 wrong passwords** for an email from one IP, each further attempt must wait: 1 second after the 6th, then 2, 4, 8… up to **15 minutes**.
+- **Per account from anywhere:** the same delays start after **20 wrong passwords in an hour** from all IPs together, against attacks spread over many addresses.
+- **Waiting attempts aren't checked:** an attempt that comes early gets `429 rate_limited` with `Retry-After`, without checking the password, so waiting attempts can't be used to guess.
+- **A correct password clears** that IP's count for the account.
+- **Unknown emails are counted exactly like real ones,** so the delays don't reveal whether an account exists.
+- **The real owner on another network** is only slowed by the per-account delays, which need many failures from everywhere. An attacker hammering the account from one IP only slows themselves.
+
+### The event log (Decision)
+
+```
+auth.auth_events   id, user_id, actor_id, event, ip, user_agent, metadata, created_at
+```
+
+| Event | When |
+|---|---|
+| `login_succeeded`, `login_failed` | Password, link, OAuth, and Apple logins; `metadata.method` says which |
+| `logout`, `logout_everywhere`, `session_ended` | |
+| `password_changed`, `password_reset` | |
+| `two_factor_enabled`, `two_factor_disabled`, `two_factor_reset`, `recovery_code_used`, `recovery_codes_regenerated` | |
+| `oauth_linked`, `oauth_unlinked` | `metadata.provider` |
+| `email_changed` | Never the addresses themselves |
+| `app_role_changed`, `org_role_changed`, `member_removed`, `two_factor_required_changed` | `actor_id` is who made the change; `metadata` has the organization and roles |
+
+- **IDs only:** `user_id` and `actor_id` are IDs. Never passwords, tokens, codes, or email addresses.
+- **Failed logins for unknown emails** are recorded with no `user_id`. They're still useful, by IP, for spotting credential stuffing.
+- **Recorded after the fact, best effort:** an event that fails to write is logged as an error, but doesn't fail the action that already happened.
+- **Kept for 1 year,** then deleted by the cleanup job. Projects with other retention needs can copy events out with the hook below.
+- **Read with `a.Events(ctx, userID, cursor)`,** a Go call for admin tooling. There's no endpoint at first. A "recent activity" page for users can be added later on top of it.
+- **`Hooks.OnEvent(ctx, Event)`:** runs after each event is recorded. It's for projects that also want events in Sentry, PostHog, or their own alerting. The analytics standard sends business events from the Go API, and this is how auth events would get there.
+
+### Email on login from a new device (Decision)
+
+The standard says users SHOULD be emailed about logins from a new device.
+
+- **What counts as new:** a successful login whose browser or app (the user agent) and network (IPv4 `/24` or IPv6 `/48`) haven't appeared together in that user's successful logins in the last **90 days**.
+- **No notice for a brand-new account's first login.**
+- **Template:** a new `Emails.NewDeviceLogin`, with the device and approximate time. No location, since there's no IP geolocation.
+- **`Config.DisableNewDeviceEmails`** turns it off, for projects where it would be noise.
+- **It's a heuristic:** a changed browser version or a new Wi-Fi network counts as new. Erring toward telling the user is the point.
+
+### Cleanup (Decision)
+
+Expired sessions, email tokens, 2FA challenges, OAuth flows, old rate-limit windows, and events over a year old all pile up today.
+
+- **A background job,** started by `New` and stopped by `Close` like the email sender, deletes them **once an hour**.
+- **Several API instances** each run it, which is harmless, since the deletes don't conflict.
+- **`Config.DisableCleanup`** is for projects that would rather schedule it themselves, with `a.Cleanup(ctx)`.
+
+### Database
+
+Migration `00008`: `auth.rate_limits` and `auth.auth_events`, as above, with indexes on `auth_events (user_id, created_at)` and `(created_at)`.
+
+### New error codes
+
+None: `rate_limited` (429) already exists from §8.
+
+### PRs
+
+1. `internal/ratelimit`, the IP keys, the per-IP and per-address limits, and the cleanup job.
+2. Failed-login delays, and the limit on wrong current passwords.
+3. The event log, `a.Events`, and `Hooks.OnEvent`.
+4. New-device emails.
+
+### Decisions to confirm
+
+1. **Rate limits in Postgres,** with fixed windows and one atomic statement per check.
+2. **The limits in the table above:** generous per IP, with IPv6 counted per `/64`, and no configuration at first.
+3. **Failed logins:** delays doubling up to 15 minutes, after 5 failures per account and IP, or 20 per account per hour from everywhere. Never a lockout, and unknown emails are treated the same.
+4. **The event log:** the events listed, IDs only, best effort, kept for 1 year, `a.Events` for tooling, and `Hooks.OnEvent`.
+5. **New-device emails:** on by default, a 90-day memory of user agent and network, and a config switch to turn them off.
+6. **An hourly cleanup job** for everything that expires, on by default.
