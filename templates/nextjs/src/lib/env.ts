@@ -13,6 +13,21 @@ const envSchema = z.object({
     .regex(/^[A-Za-z0-9-]+$/)
     .default("x-real-ip")
     .transform((h) => h.toLowerCase()),
+  // The sign-in providers turned on in the Go API's Config.OAuth, e.g.
+  // "google,github". Their buttons appear on the login and account pages.
+  OAUTH_PROVIDERS: z
+    .string()
+    .default("")
+    .transform((s) =>
+      s
+        .split(",")
+        .map((p) => p.trim())
+        .filter(Boolean),
+    )
+    .pipe(z.array(z.enum(["google", "github"]))),
+  // The mobile app's deep link for finishing a sign-in, e.g.
+  // exampleapp://oauth. Without it, /oauth/callback/mobile answers 404.
+  MOBILE_OAUTH_REDIRECT_URL: z.url().optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;

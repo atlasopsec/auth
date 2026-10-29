@@ -17,6 +17,7 @@ It's a complete Next.js app so it can be run and tested, but projects **copy par
 | `src/components/auth/`                     | The forms. Restyle them freely                                                                                                                                          |
 | `src/app/(auth)/`                          | Log in, 2FA, sign up, forgot and reset password, verify email, confirm an email change, and accept an invitation. The module's emails link to these paths, so keep them |
 | `src/app/account/`                         | The account settings: password, email, sessions, and 2FA                                                                                                                |
+| `src/app/oauth/`                           | Where Google and GitHub send the browser back, for the web app and the mobile app. Register both URLs with each provider                                                |
 
 The pages use three shadcn/ui-style components from `src/components/ui/` (`Button`, `Input`, `Label`). If your project already has shadcn/ui, use its own.
 
@@ -49,12 +50,14 @@ const invoices = await callApi("/v1/invoices", invoiceListSchema, {
 
 ## Settings
 
-| Variable           | Example                            | Required         |
-| ------------------ | ---------------------------------- | ---------------- |
-| `API_URL`          | `http://api.railway.internal:8080` | Yes              |
-| `CLIENT_IP_HEADER` | `x-real-ip`                        | No (`x-real-ip`) |
+| Variable                    | Example                            | Required         |
+| --------------------------- | ---------------------------------- | ---------------- |
+| `API_URL`                   | `http://api.railway.internal:8080` | Yes              |
+| `CLIENT_IP_HEADER`          | `x-real-ip`                        | No (`x-real-ip`) |
+| `OAUTH_PROVIDERS`           | `google,github`                    | No (none)        |
+| `MOBILE_OAUTH_REDIRECT_URL` | `exampleapp://oauth`               | No               |
 
-Neither is a secret, and neither may have the `NEXT_PUBLIC_` prefix.
+None are secrets, and none may have the `NEXT_PUBLIC_` prefix. `OAUTH_PROVIDERS` lists the providers turned on in the Go API's `Config.OAuth`; their buttons appear on the login and account pages. `MOBILE_OAUTH_REDIRECT_URL` is the mobile app's deep link; without it, `/oauth/callback/mobile` answers `404`.
 
 The Go API must list Railway's private network in `Config.TrustedProxies`, so it believes the IP and user agent the web app forwards, and only from the web app.
 

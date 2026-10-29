@@ -1281,6 +1281,7 @@ The auth standard says these pieces are **copied** into projects, not installed,
 - **Finishing:** `/oauth/callback` is a route handler, not a page, since only route handlers and server actions can set cookies. It sends `code`, `state`, and the verifier from the cookie to `POST /v1/oauth-flows/complete`, clears the verifier cookie, and then sets the session cookie, or the 2FA cookie, and redirects.
 - **No `Origin` check on the callback,** although the standard asks for one on route handlers that change data. The provider's redirect is a plain navigation, so there's no `Origin` to check. The verifier cookie protects it instead: only the browser that started the flow has it, which is what stops someone finishing their own flow in a victim's browser (§9). The handler's comment says so.
 - **Linking** a provider from `/account` works the same way, with the user's session.
+- **The verifier cookie is cleared on every return,** whatever happens, so a flow can't be retried with it. Failures go back to `/login` (or `/account` when linking) with a fixed notice, never the provider's or API's text.
 - **`/oauth/callback/mobile`** is a route handler that redirects to `MOBILE_OAUTH_REDIRECT_URL` (the app's deep link, e.g. `exampleapp://oauth`) with the same `code` and `state`. Without that setting it answers `404`.
 
 ### Settings

@@ -16,6 +16,8 @@ export default defineConfig({
     setupFiles: ["./src/test/setup.ts"],
     env: {
       API_URL: "http://api.test",
+      OAUTH_PROVIDERS: "google",
+      MOBILE_OAUTH_REDIRECT_URL: "exampleapp://oauth",
     },
   },
 });

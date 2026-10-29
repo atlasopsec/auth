@@ -3,6 +3,8 @@ import Link from "next/link";
 import { Suspense } from "react";
 
 import { LoginForm } from "@/components/auth/login-form";
+import { OAuthButtons } from "@/components/auth/oauth-buttons";
+import { PROVIDER_NAMES, enabledProviders } from "@/lib/auth/oauth";
 import { noticeText } from "@/lib/auth/notices";
 import { safeNext } from "@/lib/auth/safe-next";
 
@@ -40,6 +42,13 @@ async function Form({
     <>
       {notice && <p role="status">{notice}</p>}
       <LoginForm next={next} />
+      <OAuthButtons
+        next={next}
+        providers={enabledProviders().map((id) => ({
+          id,
+          name: PROVIDER_NAMES[id],
+        }))}
+      />
     </>
   );
 }

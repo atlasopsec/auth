@@ -73,3 +73,15 @@ export const twoFactorSetupSchema = z.object({
 export const recoveryCodesSchema = z.object({
   recovery_codes: z.array(z.string()),
 });
+
+// GET /v1/users/me/oauth-accounts.
+export const oauthAccountsSchema = z.object({
+  data: z.array(
+    z.object({
+      id: z.string(),
+      provider: z.string(),
+      email: z.string(),
+      created_at: z.string(),
+    }),
+  ),
+});
