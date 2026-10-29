@@ -786,6 +786,8 @@ a.SetTwoFactorRequired(ctx, userID, true) // an individual user (the standard)
 - **It applies to the whole account.** Being an admin of one organization means 2FA everywhere. That's simpler, and nobody has to reason about which organization a request touches.
 - **Users who must have 2FA but haven't set it up** can still log in. Until they finish setup, every request except the 2FA setup endpoints, `GET /v1/users/me` and logging out gets `403 two_factor_setup_required`. That's the standard's "can't use the app until they do", and the app can send them straight to setup.
 - **Privileged sessions last 12 hours** (the standard, §4). That's enforced on every request, so promoting someone takes effect on their next request, not their next login.
+- **"Privileged" means holding one of `TwoFactorRoles`.** A user marked with `SetTwoFactorRequired` must have 2FA but keeps regular sessions, since the standard ties the 12 hours to roles.
+- **`TwoFactorRoles` must name roles defined in `OrgRoles` or `AppRoles`,** so a typo fails at startup instead of leaving a role unprotected.
 
 ### Guessing codes, until step 8 (Decision)
 

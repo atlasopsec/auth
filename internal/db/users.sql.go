@@ -84,6 +84,46 @@ func (q *Queries) GetUserByID(ctx context.Context, id uuid.UUID) (AuthUser, erro
 	return i, err
 }
 
+const getUserWithTwoFactor = `-- name: GetUserWithTwoFactor :one
+SELECT u.id, u.email, u.email_verified_at, u.password_hash, u.two_factor_required, u.created_at, u.updated_at,
+    (EXISTS (SELECT 1 FROM auth.user_roles r WHERE r.user_id = u.id AND r.role = ANY ($1::text[]))
+        OR EXISTS (SELECT 1 FROM auth.memberships m WHERE m.user_id = u.id AND m.role = ANY ($1::text[])))::boolean AS privileged,
+    EXISTS (SELECT 1 FROM auth.totp_secrets t WHERE t.user_id = u.id AND t.confirmed_at IS NOT NULL)::boolean AS two_factor_enabled
+FROM auth.users u
+WHERE u.id = $2
+`
+
+type GetUserWithTwoFactorParams struct {
+	Roles []string
+	ID    uuid.UUID
+}
+
+type GetUserWithTwoFactorRow struct {
+	AuthUser         AuthUser
+	Privileged       bool
+	TwoFactorEnabled bool
+}
+
+// The user, with what decides their 2FA rules: whether they hold one of
+// @roles (Config.TwoFactorRoles) as an app role or in any organization,
+// and whether they have 2FA on.
+func (q *Queries) GetUserWithTwoFactor(ctx context.Context, arg GetUserWithTwoFactorParams) (GetUserWithTwoFactorRow, error) {
+	row := q.db.QueryRow(ctx, getUserWithTwoFactor, arg.Roles, arg.ID)
+	var i GetUserWithTwoFactorRow
+	err := row.Scan(
+		&i.AuthUser.ID,
+		&i.AuthUser.Email,
+		&i.AuthUser.EmailVerifiedAt,
+		&i.AuthUser.PasswordHash,
+		&i.AuthUser.TwoFactorRequired,
+		&i.AuthUser.CreatedAt,
+		&i.AuthUser.UpdatedAt,
+		&i.Privileged,
+		&i.TwoFactorEnabled,
+	)
+	return i, err
+}
+
 const markEmailVerified = `-- name: MarkEmailVerified :exec
 UPDATE auth.users
 SET email_verified_at = coalesce(email_verified_at, $1), updated_at = $1
@@ -99,6 +139,24 @@ type MarkEmailVerifiedParams struct {
 func (q *Queries) MarkEmailVerified(ctx context.Context, arg MarkEmailVerifiedParams) error {
 	_, err := q.db.Exec(ctx, markEmailVerified, arg.Now, arg.ID)
 	return err
+}
+
+const setTwoFactorRequired = `-- name: SetTwoFactorRequired :execrows
+UPDATE auth.users SET two_factor_required = $1, updated_at = $2 WHERE id = $3
+`
+
+type SetTwoFactorRequiredParams struct {
+	Required bool
+	Now      time.Time
+	ID       uuid.UUID
+}
+
+func (q *Queries) SetTwoFactorRequired(ctx context.Context, arg SetTwoFactorRequiredParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setTwoFactorRequired, arg.Required, arg.Now, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const updatePasswordHash = `-- name: UpdatePasswordHash :exec

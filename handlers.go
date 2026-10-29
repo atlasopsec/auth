@@ -39,9 +39,9 @@ func (a *Auth) Register(mux *http.ServeMux) {
 	mux.Handle("POST /v1/email-changes/confirm", endpoint(http.HandlerFunc(a.confirmEmailChange)))
 	a.registerOrganizations(mux)
 	a.registerTwoFactor(mux)
-	mux.Handle("GET /v1/users/me", endpoint(a.Authenticated(http.HandlerFunc(a.me))))
+	mux.Handle("GET /v1/users/me", endpoint(a.duringSetup(http.HandlerFunc(a.me))))
 	mux.Handle("GET /v1/sessions", endpoint(a.Authenticated(http.HandlerFunc(a.listSessions))))
-	mux.Handle("DELETE /v1/sessions/current", endpoint(a.Authenticated(http.HandlerFunc(a.logOut))))
+	mux.Handle("DELETE /v1/sessions/current", endpoint(a.duringSetup(http.HandlerFunc(a.logOut))))
 	mux.Handle("DELETE /v1/sessions/{id}", endpoint(a.Authenticated(http.HandlerFunc(a.endSession))))
 	mux.Handle("DELETE /v1/sessions", endpoint(a.Authenticated(http.HandlerFunc(a.logOutEverywhere))))
 }
@@ -287,18 +287,18 @@ func (a *Auth) logIn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	enabled, err := twoFactorEnabled(r.Context(), a.q, row.ID)
+	_, tf, err := a.userWithTwoFactor(r.Context(), a.q, row.ID)
 	if err != nil {
 		httpapi.WriteInternalError(w, r, a.log, err)
 		return
 	}
-	if enabled {
+	if tf.enabled {
 		a.writeChallenge(w, r, row.ID, session.Client(req.Client))
 		return
 	}
 
 	ip, ua := httpapi.Client(r, a.trusted)
-	tok, s, err := a.sessions.Create(r.Context(), row.ID, session.Meta{Client: session.Client(req.Client), IP: ip, UserAgent: ua}, session.Standard)
+	tok, s, err := a.sessions.Create(r.Context(), row.ID, session.Meta{Client: session.Client(req.Client), IP: ip, UserAgent: ua}, sessionPolicy(tf))
 	if err != nil {
 		httpapi.WriteInternalError(w, r, a.log, err)
 		return

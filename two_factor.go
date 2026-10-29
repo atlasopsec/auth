@@ -18,30 +18,18 @@ import (
 )
 
 func (a *Auth) registerTwoFactor(mux *http.ServeMux) {
-	mux.Handle("POST /v1/users/me/two-factor", endpoint(a.Authenticated(http.HandlerFunc(a.startTwoFactor))))
-	mux.Handle("POST /v1/users/me/two-factor/confirm", endpoint(a.Authenticated(http.HandlerFunc(a.confirmTwoFactor))))
+	mux.Handle("POST /v1/users/me/two-factor", endpoint(a.duringSetup(http.HandlerFunc(a.startTwoFactor))))
+	mux.Handle("POST /v1/users/me/two-factor/confirm", endpoint(a.duringSetup(http.HandlerFunc(a.confirmTwoFactor))))
 	mux.Handle("DELETE /v1/users/me/two-factor", endpoint(a.Authenticated(http.HandlerFunc(a.disableTwoFactor))))
 	mux.Handle("POST /v1/users/me/two-factor/recovery-codes", endpoint(a.Authenticated(http.HandlerFunc(a.regenerateRecoveryCodes))))
 	mux.Handle("POST /v1/two-factor-challenges/verify", endpoint(http.HandlerFunc(a.verifyChallenge)))
 }
 
-type twoFactorState struct {
-	enabled  bool
-	required bool
-}
-
 // twoFactorStatus reports whether a user has 2FA on, and whether they
 // must.
 func (a *Auth) twoFactorStatus(ctx context.Context, userID uuid.UUID) (twoFactorState, error) {
-	user, err := a.q.GetUserByID(ctx, userID)
-	if err != nil {
-		return twoFactorState{}, fmt.Errorf("reading user: %w", err)
-	}
-	enabled, err := twoFactorEnabled(ctx, a.q, userID)
-	if err != nil {
-		return twoFactorState{}, err
-	}
-	return twoFactorState{enabled: enabled, required: user.TwoFactorRequired}, nil
+	_, s, err := a.userWithTwoFactor(ctx, a.q, userID)
+	return s, err
 }
 
 // checkPassword verifies a user's current password. Accounts without one

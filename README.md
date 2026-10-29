@@ -53,7 +53,7 @@ How the module is structured and how projects use it: [docs/design.md](docs/desi
 - [x] Email verification and password reset
 - [x] Email change
 - [x] Roles, permissions, and organizations
-- [ ] Two-factor authentication (TOTP)
+- [x] Two-factor authentication (TOTP)
 - [ ] OAuth: Google, GitHub, Apple
 - [ ] Rate limiting, security event log, and email sending
 - [ ] `v1.0.0`

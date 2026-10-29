@@ -35,7 +35,12 @@ type accessFixture struct {
 
 func setupAccess(t *testing.T) accessFixture {
 	t.Helper()
-	f := setupWith(t, Config{AllowUnverifiedLogin: true, OrgRoles: testOrgRoles, AppRoles: testAppRoles})
+	return setupAccessWith(t, Config{AllowUnverifiedLogin: true, OrgRoles: testOrgRoles, AppRoles: testAppRoles})
+}
+
+func setupAccessWith(t *testing.T, cfg Config) accessFixture {
+	t.Helper()
+	f := setupWith(t, cfg)
 	ran := new(bool)
 	// report writes what the handler saw, so tests can check the context.
 	report := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
