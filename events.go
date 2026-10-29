@@ -84,6 +84,9 @@ const eventPageSize = 50
 // and user agent.
 func (a *Auth) event(r *http.Request, typ string, userID, actorID *uuid.UUID, metadata map[string]string) {
 	ip, ua := httpapi.Client(r, a.trusted)
+	if typ == EventLoginSucceeded && userID != nil && !a.disableNewDevice {
+		a.noticeNewDevice(r.Context(), *userID, ip, ua)
+	}
 	a.recordEvent(r.Context(), Event{UserID: userID, ActorID: actorID, Type: typ, IP: ip, UserAgent: ua, Metadata: metadata})
 }
 
@@ -116,17 +119,22 @@ func (a *Auth) insertEvent(ctx context.Context, e Event) error {
 	if err != nil {
 		return fmt.Errorf("encoding metadata: %w", err)
 	}
-	var ua *string
-	if e.UserAgent != "" {
-		s := truncateRunes(strings.ToValidUTF8(e.UserAgent, "�"), 512)
-		ua = &s
-	}
 	if err := a.q.CreateAuthEvent(ctx, db.CreateAuthEventParams{
-		ID: e.ID, UserID: e.UserID, ActorID: e.ActorID, Event: e.Type, Ip: e.IP, UserAgent: ua, Metadata: meta, Now: e.CreatedAt,
+		ID: e.ID, UserID: e.UserID, ActorID: e.ActorID, Event: e.Type, Ip: e.IP, UserAgent: storedUserAgent(e.UserAgent), Metadata: meta, Now: e.CreatedAt,
 	}); err != nil {
 		return fmt.Errorf("inserting: %w", err)
 	}
 	return nil
+}
+
+// storedUserAgent is ua as it's stored: valid UTF-8, at most 512
+// characters, and nil when empty.
+func storedUserAgent(ua string) *string {
+	if ua == "" {
+		return nil
+	}
+	s := truncateRunes(strings.ToValidUTF8(ua, "�"), 512)
+	return &s
 }
 
 func truncateRunes(s string, n int) string {

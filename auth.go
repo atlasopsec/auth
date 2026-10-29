@@ -110,6 +110,10 @@ type Config struct {
 	// DisableCleanup stops the module deleting expired data every hour in
 	// the background. Call Auth.Cleanup on your own schedule instead.
 	DisableCleanup bool
+
+	// DisableNewDeviceEmails stops emailing users when they log in from a
+	// browser or app and network they haven't used in the last 90 days.
+	DisableNewDeviceEmails bool
 }
 
 // Hooks let a project react to auth events.
@@ -146,8 +150,10 @@ type Auth struct {
 	appURL          string
 	appName         string
 	allowUnverified bool
-	emails          Emails
-	box             *secretbox.Box
+	// disableNewDevice is Config.DisableNewDeviceEmails.
+	disableNewDevice bool
+	emails           Emails
+	box              *secretbox.Box
 	// breach is nil when the breach check is disabled.
 	breach         breachChecker
 	orgRoles       rbac.Roles
@@ -211,20 +217,21 @@ func New(cfg Config) (*Auth, error) {
 		}
 	}
 	a := &Auth{
-		pool:            cfg.DB,
-		q:               db.New(cfg.DB),
-		trusted:         append([]netip.Prefix(nil), cfg.TrustedProxies...),
-		hooks:           cfg.Hooks,
-		log:             cfg.Logger,
-		now:             cfg.Now,
-		appURL:          appURL,
-		box:             box,
-		appName:         cfg.AppName,
-		allowUnverified: cfg.AllowUnverifiedLogin,
-		emails:          cfg.Emails,
-		orgRoles:        cfg.OrgRoles,
-		appRoles:        cfg.AppRoles,
-		twoFactorRoles:  append([]string(nil), cfg.TwoFactorRoles...),
+		pool:             cfg.DB,
+		q:                db.New(cfg.DB),
+		trusted:          append([]netip.Prefix(nil), cfg.TrustedProxies...),
+		hooks:            cfg.Hooks,
+		log:              cfg.Logger,
+		now:              cfg.Now,
+		appURL:           appURL,
+		box:              box,
+		appName:          cfg.AppName,
+		allowUnverified:  cfg.AllowUnverifiedLogin,
+		disableNewDevice: cfg.DisableNewDeviceEmails,
+		emails:           cfg.Emails,
+		orgRoles:         cfg.OrgRoles,
+		appRoles:         cfg.AppRoles,
+		twoFactorRoles:   append([]string(nil), cfg.TwoFactorRoles...),
 
 		disableOrgCreation: cfg.DisableOrganizationCreation,
 	}
@@ -275,6 +282,9 @@ func New(cfg Config) (*Auth, error) {
 	}
 	if a.emails.OAuthUnlinked == nil {
 		a.emails.OAuthUnlinked = defaultOAuthUnlinked
+	}
+	if a.emails.NewDeviceLogin == nil {
+		a.emails.NewDeviceLogin = defaultNewDeviceLogin
 	}
 	if !cfg.DisableBreachCheck {
 		a.breach = pwned.New(pwned.DefaultURL)
