@@ -209,6 +209,7 @@ func (a *Auth) confirmTwoFactor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.logEvent(r, "auth: two-factor enabled", c.user.ID)
+	a.event(r, EventTwoFactorEnabled, &c.user.ID, nil, nil)
 	a.sendNotice(c.user.Email, a.emails.TwoFactorEnabled)
 	httpapi.WriteJSON(w, r, http.StatusOK, recoveryCodesJSON{RecoveryCodes: codes})
 }
@@ -282,6 +283,7 @@ func (a *Auth) disableTwoFactor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.logEvent(r, "auth: two-factor disabled", c.user.ID)
+	a.event(r, EventTwoFactorDisabled, &c.user.ID, nil, nil)
 	a.sendNotice(c.user.Email, a.emails.TwoFactorDisabled)
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -315,6 +317,7 @@ func (a *Auth) regenerateRecoveryCodes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.logEvent(r, "auth: recovery codes regenerated", c.user.ID)
+	a.event(r, EventRecoveryCodesRegenerated, &c.user.ID, nil, nil)
 	a.sendNotice(c.user.Email, a.emails.RecoveryCodesRegenerated)
 	httpapi.WriteJSON(w, r, http.StatusOK, recoveryCodesJSON{RecoveryCodes: codes})
 }

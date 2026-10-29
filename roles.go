@@ -18,6 +18,7 @@ func (a *Auth) SetAppRole(ctx context.Context, userID uuid.UUID, role string) er
 		if err := a.q.DeleteUserRole(ctx, userID); err != nil {
 			return fmt.Errorf("auth: removing app role: %w", err)
 		}
+		a.recordEvent(ctx, Event{Type: EventAppRoleChanged, UserID: &userID, Metadata: map[string]string{"role": ""}})
 		return nil
 	}
 	if !a.appRoles.Defines(role) {
@@ -27,5 +28,6 @@ func (a *Auth) SetAppRole(ctx context.Context, userID uuid.UUID, role string) er
 	if err != nil {
 		return fmt.Errorf("auth: setting app role: %w", err)
 	}
+	a.recordEvent(ctx, Event{Type: EventAppRoleChanged, UserID: &userID, Metadata: map[string]string{"role": role}})
 	return nil
 }

@@ -11,8 +11,9 @@ import (
 )
 
 // Cleanup deletes what has expired: sessions, email links, 2FA challenges
-// and old wrong-code records, OAuth flows, and ended rate-limit windows.
-// They're already refused, so this only frees space.
+// and old wrong-code records, OAuth flows, ended rate-limit windows and
+// login delays, and security events over a year old. Apart from the
+// events, they're already refused, so this only frees space.
 //
 // A background job runs it every hour, unless Config.DisableCleanup is
 // set; then call it on your own schedule. Running it from several API
@@ -32,6 +33,7 @@ func (a *Auth) Cleanup(ctx context.Context) error {
 		{"2FA failures", func() (int64, error) { return a.q.DeleteTwoFactorFailuresBefore(ctx, now.Add(-guessWindow)) }},
 		{"OAuth flows", func() (int64, error) { return a.q.DeleteSpentOAuthFlows(ctx, now) }},
 		{"rate limits", func() (int64, error) { return a.limiter.DeleteEnded(ctx) }},
+		{"security events", func() (int64, error) { return a.q.DeleteAuthEventsBefore(ctx, now.Add(-eventRetention)) }},
 		{"login failures", func() (int64, error) {
 			return a.q.DeleteOldLoginFailures(ctx, db.DeleteOldLoginFailuresParams{ResetBefore: now.Add(-loginFailureReset), Now: now})
 		}},

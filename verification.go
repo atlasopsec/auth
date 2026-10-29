@@ -153,6 +153,7 @@ func (a *Auth) confirmVerification(w http.ResponseWriter, r *http.Request) {
 		writeChallengeJSON(w, r, tok, expires)
 		return
 	}
+	a.event(r, EventLoginSucceeded, &row.ID, nil, map[string]string{"method": "verification_link"})
 	user := userFromRow(row)
 	user.EmailVerified = true
 	httpapi.WriteJSON(w, r, http.StatusCreated, loginResponse{User: toUserJSON(user), Token: tok, ExpiresAt: timestamp(expires)})

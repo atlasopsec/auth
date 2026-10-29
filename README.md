@@ -67,6 +67,10 @@ The module rate-limits logins, sign-ups, emails, and sign-in starts per client I
 
 A background job deletes expired sessions, links, and other short-lived rows every hour. To run it on your own schedule instead, set `Config.DisableCleanup` and call `a.Cleanup(ctx)`.
 
+## Security event log
+
+Logins, failed logins, logouts, and every password, 2FA, OAuth, email, and role change are recorded in `auth.auth_events`, with the IP and user agent but never secrets or email addresses. They're kept for a year. Read a user's events with `a.Events(ctx, userID, cursor)` in admin tooling, or pass each one on, for example to Sentry or PostHog, with `Hooks.OnEvent`. The full list is in [docs/api.md §10](docs/api.md).
+
 ## Design
 
 How the module is structured and how projects use it: [docs/design.md](docs/design.md). The public Go API and HTTP endpoints: [docs/api.md](docs/api.md).

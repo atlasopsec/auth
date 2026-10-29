@@ -152,8 +152,10 @@ func (a *Auth) confirmPasswordReset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.logEvent(r, "auth: password reset", t.UserID)
+	a.event(r, EventPasswordReset, &t.UserID, nil, nil)
 	if res.check.usedRecovery {
 		a.logEvent(r, "auth: recovery code used", t.UserID)
+		a.event(r, EventRecoveryCodeUsed, &t.UserID, nil, nil)
 		a.send(res.user.Email, a.emails.RecoveryCodeUsed, EmailData{AppName: a.appName, AppURL: a.appURL, RecoveryCodesLeft: int(res.recoveryCodesLeft)}, uuid.Must(uuid.NewV7()))
 	}
 	a.sendNotice(res.user.Email, a.emails.PasswordChanged)
@@ -320,6 +322,7 @@ func (a *Auth) changePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.logEvent(r, "auth: password changed", c.user.ID)
+	a.event(r, EventPasswordChanged, &c.user.ID, nil, nil)
 	a.sendNotice(c.user.Email, a.emails.PasswordChanged)
 	w.WriteHeader(http.StatusNoContent)
 }

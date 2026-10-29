@@ -53,6 +53,14 @@ var ErrInvalidOrgName = errors.New("auth: organization name must be 1 to 200 cha
 // It's for apps that create organizations themselves, e.g. when a client
 // signs up, typically with Config.DisableOrganizationCreation set.
 func (a *Auth) CreateOrganization(ctx context.Context, name string, ownerID uuid.UUID) (Organization, error) {
+	o, err := a.createOrg(ctx, name, ownerID)
+	if err == nil {
+		a.recordEvent(ctx, Event{Type: EventMemberAdded, UserID: &ownerID, Metadata: map[string]string{"organization_id": o.ID.String(), "role": OwnerRole}})
+	}
+	return o, err
+}
+
+func (a *Auth) createOrg(ctx context.Context, name string, ownerID uuid.UUID) (Organization, error) {
 	if a.orgRoles == nil {
 		return Organization{}, errors.New("auth: CreateOrganization needs Config.OrgRoles")
 	}
@@ -166,12 +174,13 @@ func (a *Auth) createOrganization(w http.ResponseWriter, r *http.Request) {
 		writeEmailNotVerified(w, r)
 		return
 	}
-	o, err := a.CreateOrganization(r.Context(), name, c.user.ID)
+	o, err := a.createOrg(r.Context(), name, c.user.ID)
 	if err != nil {
 		httpapi.WriteInternalError(w, r, a.log, err)
 		return
 	}
 	a.logEvent(r, "auth: organization created", c.user.ID)
+	a.event(r, EventMemberAdded, &c.user.ID, nil, map[string]string{"organization_id": o.ID.String(), "role": OwnerRole})
 	httpapi.WriteJSON(w, r, http.StatusCreated, toOrgJSON(o, OwnerRole))
 }
 
@@ -349,6 +358,7 @@ func (a *Auth) changeMemberRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.logEvent(r, "auth: member role changed", c.user.ID)
+	a.event(r, EventOrgRoleChanged, &target, &c.user.ID, map[string]string{"organization_id": c.org.ID.String(), "role": req.Role})
 	httpapi.WriteJSON(w, r, http.StatusOK, row)
 }
 
@@ -387,6 +397,7 @@ func (a *Auth) removeMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.logEvent(r, "auth: member removed", c.user.ID)
+	a.event(r, EventMemberRemoved, &target, &c.user.ID, map[string]string{"organization_id": c.org.ID.String()})
 	w.WriteHeader(http.StatusNoContent)
 }
 
