@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "attribution": {
+    "commit": "",
+    "pr": ""
+  },
+  "permissions": {
+    "allow": [
+      "Bash(make *)",
+      "Bash(go build *)",
+      "Bash(go test *)",
+      "Bash(go vet *)",
+      "Bash(go tool *)",
+      "Bash(go mod download *)",
+      "Bash(go mod tidy *)",
+      "Bash(pnpm install --frozen-lockfile)",
+      "Bash(git status *)",
+      "Bash(git diff *)",
+      "Bash(git log *)"
+    ],
+    "ask": [
+      "Bash(go get *)",
+      "Bash(pnpm add *)",
+      "Bash(pnpm remove *)",
+      "Edit(./.github/**)",
+      "Edit(./.claude/**)"
+    ],
+    "deny": [
+      "Read(.env)",
+      "Read(.env.local)",
+      "Bash(railway *)",
+      "Bash(gh pr merge *)",
+      "mcp__github__merge_pull_request",
+      "Bash(git push -f*)",
+      "Bash(git push * -f*)",
+      "Bash(git push *--force*)",
+      "Bash(git push * main)",
+      "Bash(git push * HEAD:main)"
+    ]
+  }
+}
