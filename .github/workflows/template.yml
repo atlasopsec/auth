@@ -11,7 +11,9 @@ name: template
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
-    paths-ignore: ["docs/**", "**.md"]
+    # No path filters: this check is required in branch protection, and a
+    # workflow skipped by a path filter never reports, so the PR would wait
+    # forever. Public repo, so the extra runs cost no Actions minutes.
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

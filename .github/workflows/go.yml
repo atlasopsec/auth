@@ -12,8 +12,9 @@ name: go
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
-    # The Go module is at the repo root; the Next.js template has its own job.
-    paths-ignore: ["templates/**", "docs/**", "**.md"]
+    # No path filters: this check is required in branch protection, and a
+    # workflow skipped by a path filter never reports, so the PR would wait
+    # forever. Public repo, so the extra runs cost no Actions minutes.
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
