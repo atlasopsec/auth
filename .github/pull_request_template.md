@@ -37,4 +37,5 @@ See: standards/git-workflow.md in jakefrenzel/engineering-standards
 - [ ] CI is green
 - [ ] I've reviewed my own diff
 - [ ] No secrets, credentials, or `.env` files are included
+- [ ] If this touches auth, permissions, file uploads, personal data, payments, or secrets, I've checked it against the security standard
 - [ ] Docs are updated, if behavior changed
