@@ -163,6 +163,9 @@ test("reset a forgotten password from the emailed link", async ({
 
   await page.goto("/login");
   await page.getByRole("link", { name: "Forgot your password?" }).click();
+  // Wait for the new page: the login page has an Email field too, so filling
+  // too early can fill the old one and submit an empty form.
+  await expect(page).toHaveURL("/forgot-password");
   await field(page, "Email").fill(email);
   await page.getByRole("button", { name: "Send reset link" }).click();
   await expect(page.getByRole("status")).toContainText("we've sent it a link");
