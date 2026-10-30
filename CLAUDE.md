@@ -51,7 +51,7 @@ Full rules: `standards/local-development.md`.
 
 - Use the `make` commands (`make dev`, `make test`, `make lint`, `make fmt`, `make check`, `make migration name=...`, `make seed`). Run `make check` before opening a PR. Don't rename the standard commands.
 - One repo per product: `apps/web`, `api/`, and if needed `apps/mobile` and `packages/shared`.
-- Tool versions are pinned in the repo (`go.mod`, `.node-version`, `packageManager`). Run Go tools with `go tool <name>`; don't install them globally or change a pin outside a version-upgrade PR.
+- Tool versions are pinned in the repo (`go.mod`, `.node-version`, `packageManager`). Run Go tools with `go tool <name>` (in a library, `go tool -modfile=tools/go.mod <name>`, never `tool` lines in its own `go.mod`); don't install them globally or change a pin outside a version-upgrade PR. Go's `toolchain` line is the latest patch release.
 - Local services run in Docker Compose; the apps run on the machine. Locally, never use live keys or real services: email goes to Mailpit, payments use test mode.
 - One `.env` at the root, never committed. Every new variable goes into `.env.example` with a value that works locally.
 
