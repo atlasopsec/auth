@@ -31,5 +31,24 @@ updates:
     commit-message:
       prefix: chore(deps)
     groups:
+      # react and react-dom require each other at the same version, so
+      # updating them one at a time always fails. Listed first so they
+      # always move together.
+      react:
+        patterns: [react, react-dom, "@types/react", "@types/react-dom"]
       minor-and-patch:
         update-types: [minor, patch]
+    ignore:
+      # @types/node follows the Node version in .node-version, not the latest.
+      - dependency-name: "@types/node"
+        update-types: [version-update:semver-major]
+      # Versions the Next.js lint toolchain doesn't support yet. Revisit when
+      # these plugins catch up; everything below these versions still comes
+      # through.
+      # eslint-config-next's import, jsx-a11y, and react plugins accept ESLint
+      # only up to 9.
+      - dependency-name: eslint
+        update-types: [version-update:semver-major]
+      # typescript-eslint 8 supports TypeScript below 6.1.
+      - dependency-name: typescript
+        versions: [">=6.1"]
