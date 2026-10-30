@@ -1,45 +1,30 @@
-# Formatting, linting, and tests for the Go module and the Next.js template.
-# See: standards/code-style.md and standards/testing.md in jakefrenzel/engineering-standards
+# Formatting, lint, types, unit tests, and end-to-end tests for the Next.js
+# template in templates/nextjs. The Go module's checks are in go.yml.
+#
+# Kept in this repo rather than the shared web.yml: the template has its own
+# package.json (no root workspace), and its end-to-end tests run against
+# examples/api and a fresh Postgres.
+# See: standards/ci.md in jakefrenzel/engineering-standards
 
-name: ci
+name: template
 
 on:
   pull_request:
-  push:
-    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths-ignore: ["docs/**", "**.md"]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  go:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-
-      - name: Check formatting
-        run: |
-          unformatted=$(gofmt -l .)
-          if [ -n "$unformatted" ]; then
-            echo "These files need gofmt:"
-            echo "$unformatted"
-            exit 1
-          fi
-
-      - name: Lint
-        uses: golangci/golangci-lint-action@v9
-        with:
-          version: v2.15.0
-
-      - name: Test
-        run: go test -race ./...
-
   web:
+    if: github.event.pull_request.draft == false
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: templates/nextjs
@@ -57,18 +42,20 @@ jobs:
           --health-retries 20
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
 
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           package_json_file: templates/nextjs/package.json
 
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version-file: templates/nextjs/.node-version
           cache: pnpm
           cache-dependency-path: templates/nextjs/pnpm-lock.yaml
 

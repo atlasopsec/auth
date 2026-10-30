@@ -1,0 +1,31 @@
+# Checks the Go API: formatting, lint, sqlc, govulncheck, and tests (-race).
+# Needs goimports, golangci-lint, govulncheck, and sqlc as `tool` lines in go.mod.
+# Delete this file if the project has no Go code.
+#
+# A short caller: it decides when to run, and the shared workflow in
+# atlasopsec/workflows decides what runs. Call it by major tag, never @main.
+# Copy to .github/workflows/go.yml in each project.
+# See: standards/ci.md in jakefrenzel/engineering-standards
+
+name: go
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    # The Go module is at the repo root; the Next.js template has its own job.
+    paths-ignore: ["templates/**", "docs/**", "**.md"]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    if: github.event.pull_request.draft == false
+    uses: atlasopsec/workflows/.github/workflows/go.yml@v1
+    with:
+      working-directory: .
+      tools-modfile: tools/go.mod

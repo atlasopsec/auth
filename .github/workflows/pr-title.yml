@@ -1,7 +1,10 @@
 # Checks that the PR title follows Conventional Commits.
 # The title becomes the squash commit message on main, so it's the one that matters.
+#
+# A short caller: it decides when to run, and the shared workflow in
+# atlasopsec/workflows decides what runs. Call it by major tag, never @main.
 # Copy to .github/workflows/pr-title.yml in each project.
-# See: standards/git-workflow.md in jakefrenzel/engineering-standards
+# See: standards/ci.md in jakefrenzel/engineering-standards
 
 name: pr-title
 
@@ -9,35 +12,13 @@ on:
   pull_request_target:
     types: [opened, edited, synchronize, reopened]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   pull-requests: read
 
 jobs:
-  check:
-    # Dependabot's titles are machine-generated ("chore(deps): Bump ...") and
-    # capitalize the summary, so they're skipped. A skipped required check
-    # still counts as passing.
-    if: github.event.pull_request.user.login != 'dependabot[bot]'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: amannn/action-semantic-pull-request@v6
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          types: |
-            feat
-            fix
-            chore
-            docs
-            refactor
-            test
-            perf
-            build
-            ci
-            style
-            revert
-          requireScope: false
-          # Summary must not start with an uppercase letter
-          subjectPattern: ^(?![A-Z]).+$
-          subjectPatternError: |
-            The summary "{subject}" must start with a lowercase letter.
+  pr-title:
+    uses: atlasopsec/workflows/.github/workflows/pr-title.yml@v1
