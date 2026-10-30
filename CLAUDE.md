@@ -4,9 +4,9 @@
 
 - **What it is:** `github.com/atlasopsec/auth`, the shared, versioned Go authentication module that every project's Go API imports: passwords, sessions, OAuth, 2FA, and RBAC. Its spec is `standards/auth.md` in `jakefrenzel/engineering-standards`.
 - **Stack:** Go library (no `main`), PostgreSQL via `pgx`, `sqlc`, `goose` migrations embedded with `embed.FS`.
-- **Run locally:** n/a (library). Use the examples and tests.
-- **Run tests:** `go test -race ./...`
-- **Lint / format:** `gofmt -l .` (must print nothing) and `golangci-lint run`
+- **Run locally:** n/a (library). `make setup` installs everything; use the examples and tests.
+- **Run tests:** `make test` (`make e2e` for the Next.js template's end-to-end tests)
+- **Lint / format:** `make lint` to check, `make fmt` to fix. Go tools are pinned in `tools/go.mod`, so run them as `go tool -modfile=tools/go.mod <name>`, never added to the root `go.mod`.
 
 ### Working in this repo
 
