@@ -165,6 +165,17 @@ Full rules: `standards/analytics.md`.
 - **Never send personal data:** no passwords, tokens, payment details, message contents, emails, or names. Identify users by internal ID only. Sentry keeps `sendDefaultPii` off and scrubs `Authorization`/`Cookie` headers.
 - PostHog stays cookieless until the user consents. Session replay is off unless the user says otherwise. Feature flags are never used for permissions.
 
+### Logging and errors
+
+Full rules: `standards/logging-and-errors.md`.
+
+- Go logs with `log/slog`: JSON to stdout in production (Railway reads it), text locally. Use the `*Context` functions so every line has `request_id` and `user_id`. Messages are fixed; values go in `snake_case` fields.
+- Levels: `debug` is off in production, `info` for normal events, `warn` for surprises the app handled, `error` only when something needs fixing (and it goes to Sentry).
+- Never log passwords, tokens, cookies, `Authorization` headers, bodies, query strings, or personal data beyond user ID and IP. Personal data hides in errors too (Postgres `Detail`, other services' responses).
+- Return wrapped errors and handle them once, in one function that maps them to the API error format. Expected errors become `4xx` and aren't logged as errors; anything else is logged once at `error`, sent to Sentry, and returned as a generic `500`. Log or return, never both. A client that went away (`context.Canceled`) isn't an error.
+- Next.js: server actions return expected errors as values and throw unexpected ones to `error.tsx`, which shows a generic message and the error's `digest`.
+- Logs stay in Railway; don't add a log tool. Production apps are watched by UptimeRobot, and alerts go to email, phone push, and Discord `#alerts`.
+
 ### Database
 
 Full rules: `standards/database.md`.
