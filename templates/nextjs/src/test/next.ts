@@ -1,5 +1,6 @@
 // Hand-written stand-ins for the parts of Next.js that only work inside a
-// request: cookies(), headers(), and redirect(). setup.ts swaps them in.
+// request: cookies(), headers(), redirect(), and connection(). setup.ts
+// swaps them in.
 
 export type SetCookie = {
   value: string;
@@ -64,3 +65,6 @@ export async function redirectOf(fn: () => Promise<unknown>): Promise<string> {
   }
   throw new Error("expected a redirect");
 }
+
+// connection() only waits for a request, and a test is always in one.
+export async function connection() {}

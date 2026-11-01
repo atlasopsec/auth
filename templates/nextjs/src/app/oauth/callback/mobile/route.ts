@@ -1,5 +1,5 @@
-// From the auth module's Next.js template (github.com/atlasopsec/auth, templates/nextjs), version 0.1.0.
-import type { NextRequest } from "next/server";
+// From the auth module's Next.js template (github.com/atlasopsec/auth, templates/nextjs), version 0.2.0.
+import { connection, type NextRequest } from "next/server";
 
 import { env } from "@/lib/env";
 
@@ -7,7 +7,11 @@ import { env } from "@/lib/env";
 // sign-in. This passes code and state on to the app's deep link, which
 // finishes the sign-in with its own verifier. It doesn't change anything
 // itself.
-export function GET(request: NextRequest) {
+export async function GET(request: NextRequest) {
+  // With Cache Components, a GET handler is prerendered at build time
+  // unless it waits for a request first. The settings are only there at
+  // runtime, so wait for one.
+  await connection();
   const deepLink = env().MOBILE_OAUTH_REDIRECT_URL;
   if (!deepLink) {
     return new Response("Not found", { status: 404 });

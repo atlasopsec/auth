@@ -1,4 +1,4 @@
-// From the auth module's Next.js template (github.com/atlasopsec/auth, templates/nextjs), version 0.1.0.
+// From the auth module's Next.js template (github.com/atlasopsec/auth, templates/nextjs), version 0.2.0.
 import "server-only";
 
 import { isIP } from "node:net";
@@ -116,11 +116,13 @@ async function toApiError(res: Response): Promise<ApiError> {
 // forwardedHeaders passes on the browser's IP and user agent. Without them,
 // the Go API's rate limits would count this server as a single client, and
 // every login would look like it came from the same device. The Go API
-// only believes them from Config.TrustedProxies.
+// only believes them from Config.TrustedProxies. With CLIENT_IP_HEADER=none
+// no IP is forwarded, and the Go API sees this server's.
 export async function forwardedHeaders(): Promise<Record<string, string>> {
   const incoming = await headers();
   const out: Record<string, string> = {};
-  const ip = incoming.get(env().CLIENT_IP_HEADER)?.trim();
+  const header = env().CLIENT_IP_HEADER;
+  const ip = header === null ? undefined : incoming.get(header)?.trim();
   if (ip && isIP(ip)) {
     out["X-Forwarded-For"] = ip;
   }

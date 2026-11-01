@@ -1,3 +1,5 @@
+import { fileURLToPath } from "node:url";
+
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vitest/config";
 
@@ -7,7 +9,11 @@ export default defineConfig({
     tsconfigPaths: true,
     alias: {
       // "server-only" throws outside Next.js's server bundles.
-      "server-only": new URL("./src/test/empty.ts", import.meta.url).pathname,
+      // fileURLToPath, not URL.pathname: pathname keeps spaces as %20 and
+      // gives /C:/... on Windows, so the alias would point nowhere.
+      "server-only": fileURLToPath(
+        new URL("./src/test/empty.ts", import.meta.url),
+      ),
     },
   },
   test: {

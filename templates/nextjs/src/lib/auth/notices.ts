@@ -1,4 +1,4 @@
-// From the auth module's Next.js template (github.com/atlasopsec/auth, templates/nextjs), version 0.1.0.
+// From the auth module's Next.js template (github.com/atlasopsec/auth, templates/nextjs), version 0.2.0.
 // Messages the login page shows after another page sends the user there.
 // Only these fixed texts are shown, never text from the URL.
 export const NOTICES = {
@@ -8,6 +8,7 @@ export const NOTICES = {
   "oauth-expired": "Signing in took too long. Try again.",
   "oauth-email-not-verified":
     "Your email address isn't verified with that provider. Verify it there, then try again.",
+  "sign-up-not-allowed": "Sign-ups aren't open to that account.",
   "oauth-linked": "The account was linked. You can now log in with it.",
   "oauth-account-in-use":
     "That account is already linked to another account here.",

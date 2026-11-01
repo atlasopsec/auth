@@ -1,4 +1,4 @@
-// From the auth module's Next.js template (github.com/atlasopsec/auth, templates/nextjs), version 0.1.0.
+// From the auth module's Next.js template (github.com/atlasopsec/auth, templates/nextjs), version 0.2.0.
 import { ResendVerificationForm } from "@/components/auth/link-forms";
 
 export default function CheckEmailPage() {
