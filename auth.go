@@ -116,6 +116,20 @@ type Config struct {
 	DisableNewDeviceEmails bool
 }
 
+// ErrSignUpNotAllowed is returned by Hooks.OnUserCreated to refuse a
+// sign-up, such as one from an address that isn't on the project's
+// allowlist. The sign-up is rolled back and logged at Info, not as an
+// error.
+//
+// With email and password in verify first mode (the default), the
+// response is exactly the one for an accepted sign-up, and no email is
+// sent, so the endpoint doesn't reveal which addresses are allowed. With
+// AllowUnverifiedLogin an accepted sign-up logs the user in, which can't
+// be imitated, so a refused one gets a 403 sign_up_not_allowed. A sign-up
+// with a provider (OAuth) also gets a 403 sign_up_not_allowed: the
+// provider has already shown that the user owns the address.
+var ErrSignUpNotAllowed = errors.New("auth: sign-up not allowed")
+
 // Hooks let a project react to auth events.
 type Hooks struct {
 	// OnUserCreated runs inside the sign-up transaction. Returning an error
@@ -126,6 +140,10 @@ type Hooks struct {
 	// through the pool aren't part of the transaction and wouldn't be
 	// undone. Keep it quick, since the transaction stays open while it
 	// runs.
+	//
+	// To refuse a sign-up, for example because the address isn't on an
+	// allowlist, return ErrSignUpNotAllowed (or an error wrapping it). Any
+	// other error is treated as a failure and answered with a 500.
 	OnUserCreated func(ctx context.Context, tx pgx.Tx, u User) error
 
 	// OnEvent runs after each security event is recorded, for projects

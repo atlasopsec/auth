@@ -4,6 +4,12 @@ What changed in each release of `github.com/atlasopsec/auth`. The Next.js templa
 
 The exported Go API and the HTTP endpoints follow [semantic versioning](https://semver.org): a minor release only adds, and anything removed or changed waits for the next major version.
 
+## Unreleased
+
+### Added
+
+- `ErrSignUpNotAllowed`. Return it from `Hooks.OnUserCreated` to refuse a sign-up, for example from an address that isn't on an allowlist. The sign-up is rolled back and logged at Info instead of Error. In verify first mode the response is the same `202 {"verification_required": true}` an accepted sign-up gets, with no email sent, so the endpoint doesn't reveal which addresses are allowed. With `AllowUnverifiedLogin`, and for sign-ups with Google, GitHub, or Apple, the answer is `403 sign_up_not_allowed`. Until now, any error from the hook, including a deliberate refusal, was a `500 internal_error` logged as an error, which told callers which addresses were allowed.
+
 ## v1.0.0
 
 The first stable release, implementing the [auth standard](https://github.com/jakefrenzel/engineering-standards/blob/main/standards/auth.md):
