@@ -1,6 +1,6 @@
 "use client";
 
-// From the auth module's Next.js template (github.com/atlasopsec/auth, templates/nextjs), version 0.1.0.
+// From the auth module's Next.js template (github.com/atlasopsec/auth, templates/nextjs), version 0.2.0.
 import { useEffect, useState } from "react";
 
 // FragmentToken is the token from the link: unknown until the page runs in

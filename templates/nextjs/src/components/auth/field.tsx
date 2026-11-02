@@ -1,6 +1,6 @@
 "use client";
 
-// From the auth module's Next.js template (github.com/atlasopsec/auth, templates/nextjs), version 0.1.0.
+// From the auth module's Next.js template (github.com/atlasopsec/auth, templates/nextjs), version 0.2.0.
 import { useId, type ComponentProps } from "react";
 
 import { Input } from "@/components/ui/input";

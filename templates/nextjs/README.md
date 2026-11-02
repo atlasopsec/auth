@@ -4,7 +4,7 @@ The web half of [`github.com/atlasopsec/auth`](../../README.md): the session coo
 
 It's a complete Next.js app so it can be run and tested, but projects **copy parts of it** into their own app rather than starting from it.
 
-**Template version 0.1.0**, for the auth module's `v1.0.0`. What changed between versions is in [CHANGELOG.md](CHANGELOG.md). Each copied file starts with a comment naming the version it came from.
+**Template version 0.2.0**, for the auth module's `v1.0.0` and later. What changed between versions is in [CHANGELOG.md](CHANGELOG.md). Each copied file starts with a comment naming the version it came from.
 
 ## What to copy
 
@@ -69,6 +69,23 @@ The Go API must list Railway's private network in `Config.TrustedProxies`, so it
 2. Send a request with a made-up header, e.g. `curl -H "X-Real-IP: 198.51.100.1" https://your-app/login`, then check the Go API's logs or the latest `auth.auth_events` row: the IP must be yours, not `198.51.100.1`.
 
 If the IP is wrong, the rate limits and the security event log are too. Change `CLIENT_IP_HEADER`, or ask Railway.
+
+### No edge that sets the header
+
+Without an edge that overwrites the header on every request, such as behind a plain reverse proxy or through `kubectl port-forward`, its value is whatever the browser sent, so anyone could pick their own IP for the rate limits and the security event log. Set `CLIENT_IP_HEADER=none` there. The web app then forwards no IP (it still forwards the user agent), and the Go API sees every request as coming from the web app. The per-IP rate limits then count all users together, so they're reached sooner; the per-address limits are unaffected.
+
+## Content Security Policy
+
+The template doesn't set a Content Security Policy yet. The [security standard](https://github.com/jakefrenzel/engineering-standards/blob/main/standards/security.md#2-security-headers) asks for a nonce-based one, set in `proxy.ts` with a new nonce per request, and that doesn't work with the template's `cacheComponents` and `partialPrefetching` settings. Those serve a static shell built ahead of time, and a script built ahead of time can't carry a nonce made per request, so the browser refuses to run it. The [Next.js CSP guide](https://nextjs.org/docs/app/guides/content-security-policy#static-vs-dynamic-rendering-with-csp) says the same: nonces need every page rendered per request, and partial prerendering is incompatible with them.
+
+To add the policy, as a project that uses this template has done:
+
+1. In `next.config.ts`, remove `cacheComponents` and `partialPrefetching`.
+2. In the root layout, add `export const dynamic = "force-dynamic";`, so every page is rendered per request.
+3. Make `proxy.ts` run on every page, except `_next/static`, `_next/image`, and prefetches, as in the Next.js guide. Keep the logged-out redirect for the protected paths only. On each request, make a nonce from `crypto.randomUUID()`, build the policy from the standard's starting point, and set it on both the request (so Next.js puts the nonce on its scripts) and the response.
+4. If the sign-in buttons are on, add the providers' sign-in origins to `form-action` (`https://accounts.google.com`, `https://github.com`): the button's form ends in a redirect there, and `form-action` covers that redirect too.
+
+Check it in a production build (`pnpm build && pnpm start`): every `<script>` tag on a page should carry the response's nonce. Pages are then rendered on every request, which costs some speed.
 
 ## Running it
 

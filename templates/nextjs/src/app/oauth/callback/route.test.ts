@@ -93,6 +93,7 @@ describe("GET /oauth/callback", () => {
 
   it.each([
     ["oauth_email_not_verified", "oauth-email-not-verified"],
+    ["sign_up_not_allowed", "sign-up-not-allowed"],
     ["oauth_failed", "oauth-failed"],
     ["something_new", "oauth-failed"],
   ])("shows a fixed notice for %s", async (code, notice) => {

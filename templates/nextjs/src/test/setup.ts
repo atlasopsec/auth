@@ -9,6 +9,10 @@ import { resetFakeRequest } from "@/test/next";
 vi.mock("next/headers", () => import("@/test/next"));
 vi.mock("next/navigation", () => import("@/test/next"));
 vi.mock("next/cache", () => ({ refresh: vi.fn() }));
+vi.mock("next/server", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("next/server")>()),
+  connection: (await import("@/test/next")).connection,
+}));
 
 beforeAll(() => apiServer.listen({ onUnhandledFrame: "error" }));
 beforeEach(() => resetFakeRequest());
