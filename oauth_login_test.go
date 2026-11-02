@@ -278,7 +278,7 @@ func TestOAuthTakesBackUnverifiedAccount(t *testing.T) {
 	t.Parallel()
 	f := setupOAuth(t, Config{AllowUnverifiedLogin: true})
 	squatter := f.signUp(t, testEmail)
-	secret, _ := f.enableTwoFactor(t, squatter.Token)
+	secret, _ := f.enableTwoFactorUnverified(t, squatter.Token)
 	pending := f.startChallenge(t, testEmail)
 	link := f.emailTokenOf(t, testEmail, 0)
 
@@ -448,5 +448,64 @@ func TestPasswordNotSet(t *testing.T) {
 		{http.MethodPost, "/v1/users/me/two-factor/recovery-codes"},
 	} {
 		wantError(t, c.method+" "+c.path, f.do(t, c.method, c.path, pwCodeBody("", "123456"), withToken(l.Token)), 409, "password_not_set")
+	}
+}
+
+// TestOAuthTakebackRemovesLinkedProviders is a squatter who linked their
+// own GitHub before linking needed a verified email. When Ada takes the
+// account back with Google, the squatter's GitHub must stop working.
+func TestOAuthTakebackRemovesLinkedProviders(t *testing.T) {
+	t.Parallel()
+	f := setupOAuth(t, Config{AllowUnverifiedLogin: true})
+	squatter := f.signUp(t, testEmail)
+	f.verifyByToken(t, squatter.Token)
+	if res := f.linkGitHub(t, squatter.Token, testPassword, 7); res.status != http.StatusCreated {
+		t.Fatalf("linking: status %d, body %s", res.status, res.body)
+	}
+	f.unverifyByToken(t, squatter.Token)
+
+	l := loginOf(t, f.googleSignIn(t, ada("g-1")))
+	if l.User.ID != squatter.User.ID {
+		t.Fatalf("signed in as %s, want the taken back account %s", l.User.ID, squatter.User.ID)
+	}
+	accts := f.oauthAccounts(t, l.Token).Data
+	if len(accts) != 1 || accts[0].Provider != providerGoogle {
+		t.Errorf("linked providers = %+v, want only Google", accts)
+	}
+	authURL, verifier := f.startFlow(t, providerGitHub, "web")
+	code, state := f.github.Authorize(authURL, oauthtest.GitHubUser{ID: 7, Emails: []oauthtest.GitHubEmail{{Email: "mallory@example.com", Primary: true, Verified: true}}})
+	if gh := loginOf(t, f.complete(t, state, code, verifier)); gh.User.ID == squatter.User.ID {
+		t.Error("the squatter's GitHub still logs in to the account")
+	}
+}
+
+// TestOAuthLinkByEmailSendsNotice checks the user is emailed when a
+// provider is linked to their account by its verified email at sign-in,
+// as when they link one themselves, and only the first time.
+func TestOAuthLinkByEmailSendsNotice(t *testing.T) {
+	t.Parallel()
+	f := setupOAuth(t, Config{AllowUnverifiedLogin: true})
+	f.verifiedUser(t, testEmail)
+	before := len(f.emailsTo(testEmail))
+
+	loginOf(t, f.googleSignIn(t, ada("g-1")))
+	loginOf(t, f.googleSignIn(t, ada("g-1")))
+	if got := len(f.emailsTo(testEmail)) - before; got != 1 {
+		t.Fatalf("%d emails, want 1", got)
+	}
+	if got, want := f.lastSubject(testEmail), "Google sign-in was added to your Example account"; got != want {
+		t.Errorf("subject = %q, want %q", got, want)
+	}
+}
+
+// TestOAuthTakebackSendsNotice checks the owner is told when signing in
+// with a provider takes back an unverified account.
+func TestOAuthTakebackSendsNotice(t *testing.T) {
+	t.Parallel()
+	f := setupOAuth(t, Config{AllowUnverifiedLogin: true})
+	f.signUp(t, testEmail)
+	loginOf(t, f.googleSignIn(t, ada("g-1")))
+	if got, want := f.lastSubject(testEmail), "Google sign-in was added to your Example account"; got != want {
+		t.Errorf("subject = %q, want %q", got, want)
 	}
 }

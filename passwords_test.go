@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/atlasopsec/auth/internal/emailtoken"
+	"github.com/atlasopsec/auth/internal/oauth/oauthtest"
 	"github.com/atlasopsec/auth/internal/password"
 	"github.com/atlasopsec/auth/internal/testdb"
 	"github.com/atlasopsec/auth/mail/mailtest"
@@ -396,5 +397,108 @@ func TestPasswordFlowsKeepSecretsOutOfLogs(t *testing.T) {
 	}
 	if ok, _ := password.Verify("the final passphrase", *f.passwordHash(t, testEmail)); !ok {
 		t.Error("final password not set")
+	}
+}
+
+// TestPasswordResetCancelsEmailChange is the account recovery case: someone
+// with the password asks to move the account to their own address, and
+// the owner resets the password. The change link must stop working, or
+// confirming it would hand them the account.
+func TestPasswordResetCancelsEmailChange(t *testing.T) {
+	t.Parallel()
+	f := verifyFirst(t)
+	l := f.verifiedUser(t, testEmail)
+	const attacker = "mallory@example.com"
+	if res := f.requestEmailChange(t, l.Token, attacker); res.status != http.StatusAccepted {
+		t.Fatalf("requesting the change: status %d, body %s", res.status, res.body)
+	}
+	change := f.emailTokenOf(t, attacker, 0)
+	f.clock.advance(emailtoken.Cooldown)
+
+	reset := f.requestReset(t, testEmail)
+	if res := f.do(t, http.MethodPost, "/v1/password-resets/confirm", resetBody(reset, newPassword)); res.status != http.StatusNoContent {
+		t.Fatalf("reset: status %d, body %s", res.status, res.body)
+	}
+	wantError(t, "email change after the reset", f.confirmEmailChange(t, change), 422, "token_invalid_or_expired")
+	if f.canLogIn(t, testEmail, newPassword) != http.StatusCreated {
+		t.Error("the account's email changed")
+	}
+}
+
+// TestPasswordChangeCancelsEmailLinks checks that changing the password
+// stops links sent before it from working: a reset link someone else
+// asked for, and an email change.
+func TestPasswordChangeCancelsEmailLinks(t *testing.T) {
+	t.Parallel()
+	f := verifyFirst(t)
+	l := f.verifiedUser(t, testEmail)
+	const attacker = "mallory@example.com"
+	if res := f.requestEmailChange(t, l.Token, attacker); res.status != http.StatusAccepted {
+		t.Fatalf("requesting the change: status %d, body %s", res.status, res.body)
+	}
+	change := f.emailTokenOf(t, attacker, 0)
+	f.clock.advance(emailtoken.Cooldown)
+	reset := f.requestReset(t, testEmail)
+
+	if res := f.do(t, http.MethodPost, "/v1/users/me/password", changeBody(testPassword, newPassword), withToken(l.Token)); res.status != http.StatusNoContent {
+		t.Fatalf("change: status %d, body %s", res.status, res.body)
+	}
+	wantError(t, "reset link after the change", f.do(t, http.MethodPost, "/v1/password-resets/confirm", resetBody(reset, "yet another passphrase")), 422, "token_invalid_or_expired")
+	wantError(t, "email change after the change", f.confirmEmailChange(t, change), 422, "token_invalid_or_expired")
+	if f.canLogIn(t, testEmail, newPassword) != http.StatusCreated {
+		t.Error("the new password doesn't work")
+	}
+}
+
+// TestPasswordResetTakesBackSquattedAccount is a squatter who signed up
+// with Ada's address, and linked GitHub and turned on 2FA before either
+// needed a verified email. Ada's reset must remove both, and not ask for
+// the squatter's 2FA code.
+func TestPasswordResetTakesBackSquattedAccount(t *testing.T) {
+	t.Parallel()
+	f := setupOAuth(t, Config{AllowUnverifiedLogin: true})
+	squatter := f.signUp(t, testEmail)
+	f.verifyByToken(t, squatter.Token)
+	if res := f.linkGitHub(t, squatter.Token, testPassword, 7); res.status != http.StatusCreated {
+		t.Fatalf("linking: status %d, body %s", res.status, res.body)
+	}
+	f.enableTwoFactorUnverified(t, squatter.Token)
+	f.clock.advance(emailtoken.Cooldown)
+
+	reset := f.requestReset(t, testEmail)
+	if res := f.do(t, http.MethodPost, "/v1/password-resets/confirm", resetBody(reset, newPassword)); res.status != http.StatusNoContent {
+		t.Fatalf("reset: status %d, body %s; want 204 without a 2FA code", res.status, res.body)
+	}
+	var linked int
+	if err := f.pool.QueryRow(context.Background(), `SELECT count(*) FROM auth.oauth_accounts WHERE user_id = $1`, squatter.User.ID).Scan(&linked); err != nil || linked != 0 {
+		t.Errorf("%d linked providers (%v), want the squatter's removed", linked, err)
+	}
+	if got := f.canLogIn(t, testEmail, newPassword); got != http.StatusCreated {
+		t.Errorf("logging in: status %d, want 201 without the squatter's 2FA", got)
+	}
+	authURL, verifier := f.startFlow(t, providerGitHub, "web")
+	code, state := f.github.Authorize(authURL, oauthtest.GitHubUser{ID: 7, Emails: []oauthtest.GitHubEmail{{Email: "mallory@example.com", Primary: true, Verified: true}}})
+	if l := loginOf(t, f.complete(t, state, code, verifier)); l.User.ID == squatter.User.ID {
+		t.Error("the squatter's GitHub still logs in to the account")
+	}
+}
+
+// TestPasswordResetOfVerifiedAccountKeepsProviders checks that only a
+// takeback removes linked providers: an ordinary reset keeps them.
+func TestPasswordResetOfVerifiedAccountKeepsProviders(t *testing.T) {
+	t.Parallel()
+	f := setupOAuth(t, Config{AllowUnverifiedLogin: true})
+	l := f.verifiedUser(t, testEmail)
+	if res := f.linkGitHub(t, l.Token, testPassword, 7); res.status != http.StatusCreated {
+		t.Fatalf("linking: status %d, body %s", res.status, res.body)
+	}
+	f.clock.advance(emailtoken.Cooldown)
+	reset := f.requestReset(t, testEmail)
+	if res := f.do(t, http.MethodPost, "/v1/password-resets/confirm", resetBody(reset, newPassword)); res.status != http.StatusNoContent {
+		t.Fatalf("reset: status %d, body %s", res.status, res.body)
+	}
+	var linked int
+	if err := f.pool.QueryRow(context.Background(), `SELECT count(*) FROM auth.oauth_accounts WHERE user_id = $1`, l.User.ID).Scan(&linked); err != nil || linked != 1 {
+		t.Errorf("%d linked providers (%v), want 1", linked, err)
 	}
 }

@@ -1,4 +1,4 @@
-// From the auth module's Next.js template (github.com/atlasopsec/auth, templates/nextjs), version 0.2.0.
+// From the auth module's Next.js template (github.com/atlasopsec/auth, templates/nextjs), version 0.3.0.
 import { z } from "zod";
 
 export const userSchema = z.object({
@@ -10,12 +10,17 @@ export const userSchema = z.object({
 
 export type User = z.infer<typeof userSchema>;
 
+// A device token, from a login with the password. Optional, since API
+// versions before it don't send one.
+const deviceTokenSchema = z.string().nullable().optional();
+
 // A new session, from logging in, signing up, or finishing 2FA.
 export const loginSchema = z.object({
   user: userSchema,
   token: z.string(),
   expires_at: z.string(),
   absolute_expires_at: z.string(),
+  device_token: deviceTokenSchema,
 });
 
 export type Login = z.infer<typeof loginSchema>;
@@ -25,6 +30,7 @@ export const challengeSchema = z.object({
   two_factor_required: z.literal(true),
   challenge_token: z.string(),
   expires_at: z.string(),
+  device_token: deviceTokenSchema,
 });
 
 export type Challenge = z.infer<typeof challengeSchema>;

@@ -88,6 +88,16 @@ type codeCheck struct {
 // client IP's (ip, from ratelimit.IP), is reached it returns a pausedError
 // without checking the code.
 func (a *Auth) checkLoginCode(ctx context.Context, q *db.Queries, userID uuid.UUID, code, ip string) (codeCheck, error) {
+	return a.checkCodeLimited(ctx, q, userID, ip, func() (bool, error) {
+		return a.checkSecondFactor(ctx, q, userID, code)
+	})
+}
+
+// checkCodeLimited runs check, which verifies a 2FA code and returns
+// errBadCode if it's wrong, under the guessing limits of checkLoginCode.
+// Every endpoint that takes a 2FA code goes through it, so no endpoint can
+// be used to guess codes faster.
+func (a *Auth) checkCodeLimited(ctx context.Context, q *db.Queries, userID uuid.UUID, ip string, check func() (usedRecovery bool, err error)) (codeCheck, error) {
 	// Taking checkSecondFactor's lock first means concurrent wrong codes are
 	// counted one at a time, so the limit can't be overshot, and the
 	// warning is sent once.
@@ -104,7 +114,7 @@ func (a *Auth) checkLoginCode(ctx context.Context, q *db.Queries, userID uuid.UU
 	if reached {
 		return codeCheck{}, pausedError{until: a.now().Add(retry)}
 	}
-	usedRecovery, err := a.checkSecondFactor(ctx, q, userID, code)
+	usedRecovery, err := check()
 	if err == nil {
 		return codeCheck{ok: true, usedRecovery: usedRecovery}, nil
 	}
@@ -139,6 +149,9 @@ type challengeJSON struct {
 	TwoFactorRequired bool      `json:"two_factor_required"`
 	ChallengeToken    string    `json:"challenge_token"`
 	ExpiresAt         timestamp `json:"expires_at"`
+	// DeviceToken is as in loginResponse: set when the password was
+	// entered, null otherwise.
+	DeviceToken *string `json:"device_token"`
 }
 
 // createChallenge starts a 2FA challenge for a user who has just proved
@@ -170,8 +183,9 @@ func (a *Auth) createChallenge(ctx context.Context, q *db.Queries, userID uuid.U
 }
 
 // writeChallenge starts a 2FA challenge and returns it in place of a
-// session. While the user is at the guessing limit, it refuses instead.
-func (a *Auth) writeChallenge(w http.ResponseWriter, r *http.Request, userID uuid.UUID, client session.Client) {
+// session, with deviceToken if it's set. While the user is at the guessing
+// limit, it refuses instead.
+func (a *Auth) writeChallenge(w http.ResponseWriter, r *http.Request, userID uuid.UUID, client session.Client, deviceToken *string) {
 	if err := a.checkPaused(r.Context(), a.q, userID); err != nil {
 		a.writeLoginCodeError(w, r, err)
 		return
@@ -182,7 +196,7 @@ func (a *Auth) writeChallenge(w http.ResponseWriter, r *http.Request, userID uui
 		return
 	}
 	a.logEvent(r, "auth: two-factor challenge started", userID)
-	writeChallengeJSON(w, r, tok, expires)
+	httpapi.WriteJSON(w, r, http.StatusOK, challengeJSON{TwoFactorRequired: true, ChallengeToken: tok, ExpiresAt: timestamp(expires), DeviceToken: deviceToken})
 }
 
 func writeChallengeJSON(w http.ResponseWriter, r *http.Request, tok string, expires time.Time) {

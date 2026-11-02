@@ -27,12 +27,25 @@ const (
 	maxLoginDelay     = 15 * time.Minute
 )
 
+// loginKey is a login failure key and the failures it allows before
+// delaying.
+type loginKey struct {
+	key       string
+	threshold int
+}
+
 // loginKeys returns the keys a login attempt for email from ip counts
-// against: per account and IP, and per account. The email is hashed and
-// need not have an account.
-func loginKeys(email, ip string) (accountIP, account string) {
+// against: per account and IP, and per account. With a valid device token
+// (device is its key, from deviceKey), the per-account key is replaced by
+// the device's own, so others' failures can't delay the owner. The email
+// is hashed and need not have an account.
+func loginKeys(email, ip, device string) []loginKey {
 	h := ratelimit.Email(email)
-	return "account-ip:" + h + ":" + ip, "account:" + h
+	keys := []loginKey{{"account-ip:" + h + ":" + ip, accountIPThreshold}}
+	if device != "" {
+		return append(keys, loginKey{device, deviceThreshold})
+	}
+	return append(keys, loginKey{"account:" + h, accountThreshold})
 }
 
 // loginDelay is how long to wait after the failures-th failure, for a key
@@ -49,11 +62,14 @@ func loginDelay(failures, threshold int) time.Duration {
 	return min(time.Second<<(over-1), maxLoginDelay)
 }
 
-// loginWait returns how long a login attempt for email from ip must still
-// wait, or 0.
-func (a *Auth) loginWait(ctx context.Context, email, ip string) (time.Duration, error) {
-	accountIP, account := loginKeys(email, ip)
-	waits, err := a.q.GetLoginWaits(ctx, []string{accountIP, account})
+// loginWait returns how long a login attempt for email from ip, with the
+// device token key device or "", must still wait, or 0.
+func (a *Auth) loginWait(ctx context.Context, email, ip, device string) (time.Duration, error) {
+	var keys []string
+	for _, k := range loginKeys(email, ip, device) {
+		keys = append(keys, k.key)
+	}
+	waits, err := a.q.GetLoginWaits(ctx, keys)
 	if err != nil {
 		return 0, fmt.Errorf("reading login delays: %w", err)
 	}
@@ -65,15 +81,12 @@ func (a *Auth) loginWait(ctx context.Context, email, ip string) (time.Duration, 
 	return wait, nil
 }
 
-// recordLoginFailure counts a wrong password for email from ip, and sets
-// how long the next attempt must wait.
-func (a *Auth) recordLoginFailure(ctx context.Context, email, ip string) error {
-	accountIP, account := loginKeys(email, ip)
+// recordLoginFailure counts a wrong password for email from ip, with the
+// device token key device or "", and sets how long the next attempt must
+// wait.
+func (a *Auth) recordLoginFailure(ctx context.Context, email, ip, device string) error {
 	now := a.now().UTC().Truncate(time.Microsecond)
-	for _, k := range []struct {
-		key       string
-		threshold int
-	}{{accountIP, accountIPThreshold}, {account, accountThreshold}} {
+	for _, k := range loginKeys(email, ip, device) {
 		id, err := uuid.NewV7()
 		if err != nil {
 			return fmt.Errorf("generating login failure ID: %w", err)
@@ -89,12 +102,18 @@ func (a *Auth) recordLoginFailure(ctx context.Context, email, ip string) error {
 	return nil
 }
 
-// clearLoginFailures forgets the failures for email from ip after a
-// correct password. Failures from elsewhere still count.
-func (a *Auth) clearLoginFailures(ctx context.Context, email, ip string) error {
-	accountIP, _ := loginKeys(email, ip)
-	if err := a.q.DeleteLoginFailures(ctx, accountIP); err != nil {
-		return fmt.Errorf("clearing login failures: %w", err)
+// clearLoginFailures forgets the failures for email from ip, and for the
+// device token key device if it's set, after a correct password. Failures
+// from elsewhere still count.
+func (a *Auth) clearLoginFailures(ctx context.Context, email, ip, device string) error {
+	forget := []string{loginKeys(email, ip, device)[0].key}
+	if device != "" {
+		forget = append(forget, device)
+	}
+	for _, k := range forget {
+		if err := a.q.DeleteLoginFailures(ctx, k); err != nil {
+			return fmt.Errorf("clearing login failures: %w", err)
+		}
 	}
 	return nil
 }

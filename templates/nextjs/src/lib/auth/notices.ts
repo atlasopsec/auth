@@ -1,4 +1,4 @@
-// From the auth module's Next.js template (github.com/atlasopsec/auth, templates/nextjs), version 0.2.0.
+// From the auth module's Next.js template (github.com/atlasopsec/auth, templates/nextjs), version 0.3.0.
 // Messages the login page shows after another page sends the user there.
 // Only these fixed texts are shown, never text from the URL.
 export const NOTICES = {

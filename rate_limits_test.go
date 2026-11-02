@@ -116,41 +116,57 @@ func TestEmailRateLimits(t *testing.T) {
 	}
 	wantRateLimited(t, "per IP", reset("another@example.com", ip))
 
-	// Per address, from many IPs, whether or not it has an account.
+	// Per address and IP, whether or not the address has an account. The
+	// per-IP limit is hourly, so a day's worth comes over several hours.
+	from := nextTestIP()
 	for i := range limitEmailAddress.Limit {
-		if res := reset("Target@example.com", nextTestIP()); res.status != http.StatusAccepted {
+		if i > 0 && i%limitEmailIP.Limit == 0 {
+			f.clock.advance(limitEmailIP.Window)
+		}
+		if res := reset("Target@example.com", from); res.status != http.StatusAccepted {
 			t.Fatalf("request %d: status %d, body %s", i+1, res.status, res.body)
 		}
 	}
-	wantRateLimited(t, "per address", verify("target@example.com", nextTestIP()))
-	f.clock.advance(limitEmailAddress.Window)
+	f.clock.advance(limitEmailIP.Window)
+	wantRateLimited(t, "per address and IP", verify("target@example.com", from))
+	// One IP using up the limit mustn't stop the address's owner, from
+	// theirs, getting their own reset emails.
 	if res := reset("target@example.com", nextTestIP()); res.status != http.StatusAccepted {
+		t.Errorf("from another IP: status %d, body %s", res.status, res.body)
+	}
+	f.clock.advance(limitEmailAddress.Window)
+	if res := reset("target@example.com", from); res.status != http.StatusAccepted {
 		t.Errorf("the next day: status %d, body %s", res.status, res.body)
 	}
 }
 
 // TestEmailRateLimitsCoverEverySender checks each endpoint that emails an
-// address counts toward that address's limit.
+// address counts toward that address's limit from an IP.
 func TestEmailRateLimitsCoverEverySender(t *testing.T) {
 	t.Parallel()
 	f := setupOrgs(t, Config{})
 	tm := f.team(t)
 	owner := tm.users[OwnerRole].Token
 	const target = "target@example.com"
+	ip := nextTestIP()
 	use := func(n int) {
-		for range n {
-			f.do(t, http.MethodPost, "/v1/password-resets", `{"email":"`+target+`"}`, fromIP(nextTestIP()))
+		for i := range n {
+			if i > 0 && i%limitEmailIP.Limit == 0 {
+				f.clock.advance(limitEmailIP.Window)
+			}
+			f.do(t, http.MethodPost, "/v1/password-resets", `{"email":"`+target+`"}`, fromIP(ip))
 		}
+		f.clock.advance(limitEmailIP.Window)
 	}
 	senders := map[string]func() response{
 		"sign-up": func() response {
-			return f.do(t, http.MethodPost, "/v1/users", credentials(target, testPassword, "web"), fromIP(nextTestIP()))
+			return f.do(t, http.MethodPost, "/v1/users", credentials(target, testPassword, "web"), fromIP(ip))
 		},
 		"email change": func() response {
-			return f.do(t, http.MethodPost, "/v1/email-changes", emailChangeBody(target, testPassword), withToken(owner), fromIP(nextTestIP()))
+			return f.do(t, http.MethodPost, "/v1/email-changes", emailChangeBody(target, testPassword), withToken(owner), fromIP(ip))
 		},
 		"invitation": func() response {
-			return f.do(t, http.MethodPost, tm.path("/invitations"), `{"email":"`+target+`","role":"viewer"}`, withToken(owner), fromIP(nextTestIP()))
+			return f.do(t, http.MethodPost, tm.path("/invitations"), `{"email":"`+target+`","role":"viewer"}`, withToken(owner), fromIP(ip))
 		},
 	}
 	use(limitEmailAddress.Limit)

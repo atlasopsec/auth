@@ -271,6 +271,12 @@ func (a *Auth) writeOAuthLogin(w http.ResponseWriter, r *http.Request, provider 
 	if res.tookBack {
 		a.logEvent(r, "auth: unverified account taken back by its email's owner", res.user.ID)
 	}
+	if res.linked {
+		// A provider identity that can claim the address, such as an
+		// admin of the email's domain, now has a way in. The owner must
+		// hear about it, as they do when they link one themselves.
+		a.sendProviderNotice(r.Context(), res.user.ID, a.emails.OAuthLinked, provider)
+	}
 	if res.challenge != "" {
 		a.logEvent(r, "auth: two-factor challenge started", res.user.ID)
 		writeChallengeJSON(w, r, res.challenge, res.expires)
@@ -411,25 +417,42 @@ func (a *Auth) userForOAuthEmail(ctx context.Context, tx pgx.Tx, email string, n
 		return row.ID, nil
 	}
 	res.tookBack = true
+	if err := a.takeBack(ctx, tx, row.ID, now); err != nil {
+		return uuid.UUID{}, err
+	}
+	if err := q.ClearPassword(ctx, db.ClearPasswordParams{ID: row.ID, Now: now}); err != nil {
+		return uuid.UUID{}, fmt.Errorf("taking back account: clearing password: %w", err)
+	}
+	return row.ID, nil
+}
+
+// takeBack removes every way into an account whose email was never
+// verified, other than its password, when the email's owner proves they
+// control it: by a provider that verified it, or a password reset. The
+// account may have been created by someone else with this address, who
+// could have linked their own providers or turned on 2FA. It then marks
+// the email verified. Call it in the transaction that proves ownership.
+func (a *Auth) takeBack(ctx context.Context, tx pgx.Tx, userID uuid.UUID, now time.Time) error {
+	q := db.New(tx)
 	for _, step := range []struct {
 		what string
 		do   func() error
 	}{
-		{"clearing password", func() error { return q.ClearPassword(ctx, db.ClearPasswordParams{ID: row.ID, Now: now}) }},
-		{"deleting 2FA secret", func() error { return q.DeleteTOTPSecret(ctx, row.ID) }},
-		{"deleting recovery codes", func() error { return q.DeleteRecoveryCodes(ctx, row.ID) }},
-		{"deleting 2FA challenges", func() error { return q.DeleteTwoFactorChallenges(ctx, row.ID) }},
-		{"deleting email tokens", func() error { return q.DeleteUnusedUserEmailTokens(ctx, row.ID) }},
-		{"marking email verified", func() error { return q.MarkEmailVerified(ctx, db.MarkEmailVerifiedParams{ID: row.ID, Now: now}) }},
+		{"deleting 2FA secret", func() error { return q.DeleteTOTPSecret(ctx, userID) }},
+		{"deleting recovery codes", func() error { return q.DeleteRecoveryCodes(ctx, userID) }},
+		{"deleting 2FA challenges", func() error { return q.DeleteTwoFactorChallenges(ctx, userID) }},
+		{"deleting email tokens", func() error { return q.DeleteUnusedUserEmailTokens(ctx, userID) }},
+		{"deleting linked providers", func() error { return q.DeleteUserOAuthAccounts(ctx, userID) }},
+		{"marking email verified", func() error { return q.MarkEmailVerified(ctx, db.MarkEmailVerifiedParams{ID: userID, Now: now}) }},
 	} {
 		if err := step.do(); err != nil {
-			return uuid.UUID{}, fmt.Errorf("taking back account: %s: %w", step.what, err)
+			return fmt.Errorf("taking back account: %s: %w", step.what, err)
 		}
 	}
-	if _, err := session.NewManager(tx, a.now).RevokeAll(ctx, row.ID); err != nil {
-		return uuid.UUID{}, err
+	if _, err := session.NewManager(tx, a.now).RevokeAll(ctx, userID); err != nil {
+		return err
 	}
-	return row.ID, nil
+	return nil
 }
 
 // createOAuthUser creates a user with a provider-verified email and no

@@ -1,6 +1,6 @@
 "use server";
 
-// From the auth module's Next.js template (github.com/atlasopsec/auth, templates/nextjs), version 0.2.0.
+// From the auth module's Next.js template (github.com/atlasopsec/auth, templates/nextjs), version 0.3.0.
 import { cookies } from "next/headers";
 import { refresh } from "next/cache";
 import { redirect } from "next/navigation";

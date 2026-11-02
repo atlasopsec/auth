@@ -118,12 +118,12 @@ func (a *Auth) confirmPasswordReset(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteInternalError(w, r, a.log, err)
 		return
 	}
-	twoFactor, err := twoFactorEnabled(ctx, a.q, t.UserID)
+	needsCode, err := resetNeedsCode(ctx, a.q, t.UserID)
 	if err != nil {
 		httpapi.WriteInternalError(w, r, a.log, err)
 		return
 	}
-	if twoFactor && req.Code == "" {
+	if needsCode && req.Code == "" {
 		writeValidationFailed(w, r, []httpapi.FieldError{codeRequired})
 		return
 	}
@@ -137,10 +137,14 @@ func (a *Auth) confirmPasswordReset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res, err := a.resetPassword(ctx, t.UserID, t.ID, hash, twoFactor, req.Code, a.clientIP(r))
+	res, err := a.resetPassword(ctx, t.UserID, t.ID, hash, req.Code, a.clientIP(r))
 	if errors.Is(err, emailtoken.ErrInvalid) {
 		// A concurrent request used the token first.
 		writeTokenInvalid(w, r)
+		return
+	}
+	if errors.Is(err, errResetCodeRequired) {
+		writeValidationFailed(w, r, []httpapi.FieldError{codeRequired})
 		return
 	}
 	if err != nil {
@@ -150,6 +154,9 @@ func (a *Auth) confirmPasswordReset(w http.ResponseWriter, r *http.Request) {
 	if !res.check.ok {
 		a.wrongLoginCode(w, r, res.user, res.check)
 		return
+	}
+	if res.tookBack {
+		a.logEvent(r, "auth: unverified account taken back by its email's owner", t.UserID)
 	}
 	a.logEvent(r, "auth: password reset", t.UserID)
 	a.event(r, EventPasswordReset, &t.UserID, nil, nil)
@@ -166,22 +173,57 @@ type resetResult struct {
 	user              db.AuthUser
 	check             codeCheck
 	recoveryCodesLeft int64
+	// tookBack means the email had never been verified, so the reset
+	// took the account back from whoever else might have created it.
+	tookBack bool
 }
 
-// resetPassword checks the 2FA code if twoFactor is set, then spends the
-// token, sets the password, verifies the email, and ends every session and
-// 2FA challenge, all or nothing. A wrong code changes nothing but the
-// failure counts, and is reported in the result.
-func (a *Auth) resetPassword(ctx context.Context, userID, tokenID uuid.UUID, hash string, twoFactor bool, code, ip string) (resetResult, error) {
+// errResetCodeRequired means a reset needs a 2FA code and none was sent.
+var errResetCodeRequired = errors.New("2FA code required to reset password")
+
+// resetNeedsCode reports whether a password reset for the user needs a 2FA
+// code: when they have 2FA on and their email is verified. 2FA on an
+// account whose email was never verified may have been turned on by
+// someone who created it with another person's address, so the reset
+// takes the account back instead, as signing in with a provider does.
+func resetNeedsCode(ctx context.Context, q *db.Queries, userID uuid.UUID) (bool, error) {
+	user, err := q.GetUserByID(ctx, userID)
+	if err != nil {
+		return false, fmt.Errorf("reading user: %w", err)
+	}
+	if user.EmailVerifiedAt == nil {
+		return false, nil
+	}
+	return twoFactorEnabled(ctx, q, userID)
+}
+
+// resetPassword checks the 2FA code if the reset needs one, then spends
+// the token, sets the password, verifies the email, and ends every
+// session, 2FA challenge, and unused email link, all or nothing. An
+// account whose email was never verified is taken back (see takeBack). A
+// wrong code changes nothing but the failure counts, and is reported in
+// the result.
+func (a *Auth) resetPassword(ctx context.Context, userID, tokenID uuid.UUID, hash, code, ip string) (resetResult, error) {
 	var res resetResult
 	err := a.withTx(ctx, func(tx pgx.Tx) error {
 		q := db.New(tx)
 		var err error
+		if _, err := q.LockUser(ctx, userID); err != nil {
+			return fmt.Errorf("locking user: %w", err)
+		}
 		if res.user, err = q.GetUserByID(ctx, userID); err != nil {
 			return fmt.Errorf("reading user: %w", err)
 		}
-		res.check.ok = !twoFactor
-		if twoFactor {
+		needsCode, err := resetNeedsCode(ctx, q, userID)
+		if err != nil {
+			return err
+		}
+		res.check.ok = !needsCode
+		if needsCode {
+			if code == "" {
+				// The email was verified after the request was checked.
+				return errResetCodeRequired
+			}
 			if res.check, err = a.checkLoginCode(ctx, q, userID, code, ip); err != nil {
 				return err
 			}
@@ -201,6 +243,12 @@ func (a *Auth) resetPassword(ctx context.Context, userID, tokenID uuid.UUID, has
 		if err := emailtoken.NewManager(tx, a.now).Use(ctx, tokenID); err != nil {
 			return err
 		}
+		if res.user.EmailVerifiedAt == nil {
+			res.tookBack = true
+			if err := a.takeBack(ctx, tx, userID, now); err != nil {
+				return err
+			}
+		}
 		if err := q.UpdatePasswordHash(ctx, db.UpdatePasswordHashParams{ID: userID, PasswordHash: &hash, Now: now}); err != nil {
 			return fmt.Errorf("setting password: %w", err)
 		}
@@ -209,6 +257,11 @@ func (a *Auth) resetPassword(ctx context.Context, userID, tokenID uuid.UUID, has
 		}
 		if err := q.DeleteTwoFactorChallenges(ctx, userID); err != nil {
 			return fmt.Errorf("deleting 2FA challenges: %w", err)
+		}
+		// Links sent before the reset, such as a pending email change,
+		// may have been asked for by whoever the reset is locking out.
+		if err := q.DeleteUnusedUserEmailTokens(ctx, userID); err != nil {
+			return fmt.Errorf("cancelling email tokens: %w", err)
 		}
 		_, err = session.NewManager(tx, a.now).RevokeAll(ctx, userID)
 		return err
@@ -239,18 +292,21 @@ func (a *Auth) requirePassword(w http.ResponseWriter, r *http.Request, userID uu
 // passwordChecked verifies the current password, writing the error
 // response and returning false if it's wrong.
 func (a *Auth) passwordChecked(w http.ResponseWriter, r *http.Request, userID uuid.UUID, pw string) bool {
-	reached, retry, err := a.limiter.Reached(r.Context(), limitWrongPassword, userID.String())
+	// Counted as a failure before checking, so concurrent guesses can't
+	// all get in before any is counted, and each guess over the limit is
+	// refused before the slow hash. A correct password takes it back.
+	allowed, retry, undo, err := a.limiter.HitUndoable(r.Context(), limitWrongPassword, userID.String())
 	if err != nil {
 		httpapi.WriteInternalError(w, r, a.log, err)
 		return false
 	}
-	if reached {
+	if !allowed {
 		writeRateLimited(w, r, retry)
 		return false
 	}
 	ok, err := a.checkPassword(r.Context(), userID, pw)
-	if err == nil && !ok {
-		if _, _, err = a.limiter.Hit(r.Context(), limitWrongPassword, userID.String()); err != nil {
+	if err == nil && ok || errors.Is(err, errPasswordNotSet) {
+		if err := undo(r.Context()); err != nil {
 			httpapi.WriteInternalError(w, r, a.log, err)
 			return false
 		}
@@ -348,6 +404,12 @@ func (a *Auth) setPasswordKeepingSession(ctx context.Context, userID, keepID uui
 	// A challenge proves the old password was entered.
 	if err := db.New(tx).DeleteTwoFactorChallenges(ctx, userID); err != nil {
 		return fmt.Errorf("deleting 2FA challenges: %w", err)
+	}
+	// Links sent before the change, such as a pending email change or a
+	// password reset, may have been asked for by whoever the change is
+	// locking out.
+	if err := db.New(tx).DeleteUnusedUserEmailTokens(ctx, userID); err != nil {
+		return fmt.Errorf("cancelling email tokens: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("committing password change: %w", err)

@@ -244,6 +244,7 @@ func TestOAuthEvents(t *testing.T) {
 	}
 
 	grace := f.signUp(t, "grace@example.com")
+	f.verifyByToken(t, grace.Token)
 	if res := f.linkGitHub(t, grace.Token, testPassword, 7); res.status != http.StatusCreated {
 		t.Fatalf("linking: status %d, body %s", res.status, res.body)
 	}

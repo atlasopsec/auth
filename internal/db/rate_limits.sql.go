@@ -69,3 +69,26 @@ func (q *Queries) HitRateLimit(ctx context.Context, arg HitRateLimitParams) (int
 	err := row.Scan(&count)
 	return count, err
 }
+
+const undoRateLimitHit = `-- name: UndoRateLimitHit :exec
+WITH deleted AS (
+    DELETE FROM auth.rate_limits d
+    WHERE d.key = $2 AND d.window_start = $3 AND d.count = 1
+)
+UPDATE auth.rate_limits u
+SET count = u.count - 1, updated_at = $1
+WHERE u.key = $2 AND u.window_start = $3 AND u.count > 1
+`
+
+type UndoRateLimitHitParams struct {
+	Now         time.Time
+	Key         string
+	WindowStart time.Time
+}
+
+// Takes back one hit. A window's row only exists with a count of at least
+// one, so the last hit is taken back by deleting it.
+func (q *Queries) UndoRateLimitHit(ctx context.Context, arg UndoRateLimitHitParams) error {
+	_, err := q.db.Exec(ctx, undoRateLimitHit, arg.Now, arg.Key, arg.WindowStart)
+	return err
+}

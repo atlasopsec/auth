@@ -2,7 +2,11 @@ import { HttpResponse, http } from "msw/http";
 import { describe, expect, it } from "vitest";
 
 import { logIn, logOut, signUp, verifyTwoFactor } from "@/lib/auth/actions";
-import { SESSION_COOKIE, TWO_FACTOR_COOKIE } from "@/lib/auth/cookies";
+import {
+  DEVICE_COOKIE,
+  SESSION_COOKIE,
+  TWO_FACTOR_COOKIE,
+} from "@/lib/auth/cookies";
 import { API, apiError, apiServer } from "@/test/api";
 import { testLogin } from "@/test/fixtures";
 import { fakeRequest, redirectOf } from "@/test/next";
@@ -102,6 +106,57 @@ describe("logIn", () => {
       values: { email: "ada@example.com" },
     });
     expect(fakeRequest.setCookies.size).toBe(0);
+  });
+
+  it("keeps the device token for a year and sends it with the next login", async () => {
+    const bodies: unknown[] = [];
+    apiServer.use(
+      http.post(`${API}/v1/sessions`, async ({ request }) => {
+        bodies.push(await request.json());
+        return HttpResponse.json(
+          { ...testLogin(), device_token: "device-token" },
+          { status: 201 },
+        );
+      }),
+    );
+
+    await redirectOf(() => logIn({}, form(credentials)));
+    expect(bodies[0]).toEqual({ ...credentials, client: "web" });
+    const cookie = fakeRequest.setCookies.get(DEVICE_COOKIE);
+    expect(cookie?.value).toBe("device-token");
+    expect(cookie?.options).toEqual({
+      httpOnly: true,
+      secure: true,
+      sameSite: "lax",
+      path: "/",
+      maxAge: 365 * 24 * 60 * 60,
+    });
+
+    fakeRequest.cookies.set(DEVICE_COOKIE, "device-token");
+    await redirectOf(() => logIn({}, form(credentials)));
+    expect(bodies[1]).toEqual({
+      ...credentials,
+      client: "web",
+      device_token: "device-token",
+    });
+  });
+
+  it("keeps the device token when the user has 2FA", async () => {
+    apiServer.use(
+      http.post(`${API}/v1/sessions`, () =>
+        HttpResponse.json({
+          two_factor_required: true,
+          challenge_token: "challenge-token",
+          expires_at: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+          device_token: "device-token",
+        }),
+      ),
+    );
+
+    await redirectOf(() => logIn({}, form(credentials)));
+    expect(fakeRequest.setCookies.get(DEVICE_COOKIE)?.value).toBe(
+      "device-token",
+    );
   });
 
   it("checks its input before calling the API", async () => {

@@ -43,3 +43,6 @@ DELETE FROM auth.oauth_accounts WHERE id = @id AND user_id = @user_id RETURNING 
 
 -- name: CountOAuthAccounts :one
 SELECT count(*) FROM auth.oauth_accounts WHERE user_id = @user_id;
+
+-- name: DeleteUserOAuthAccounts :exec
+DELETE FROM auth.oauth_accounts WHERE user_id = @user_id;

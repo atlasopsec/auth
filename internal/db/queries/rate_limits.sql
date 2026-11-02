@@ -11,3 +11,14 @@ SELECT count FROM auth.rate_limits WHERE key = @key AND window_start = @window_s
 
 -- name: DeleteEndedRateLimits :execrows
 DELETE FROM auth.rate_limits WHERE expires_at <= @now;
+
+-- Takes back one hit. A window's row only exists with a count of at least
+-- one, so the last hit is taken back by deleting it.
+-- name: UndoRateLimitHit :exec
+WITH deleted AS (
+    DELETE FROM auth.rate_limits d
+    WHERE d.key = @key AND d.window_start = @window_start AND d.count = 1
+)
+UPDATE auth.rate_limits u
+SET count = u.count - 1, updated_at = @now
+WHERE u.key = @key AND u.window_start = @window_start AND u.count > 1;

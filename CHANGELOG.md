@@ -4,6 +4,23 @@ What changed in each release of `github.com/atlasopsec/auth`. The Next.js templa
 
 The exported Go API and the HTTP endpoints follow [semantic versioning](https://semver.org): a minor release only adds, and anything removed or changed waits for the next major version.
 
+## v1.2.0
+
+### Security
+
+- A password reset, or a password change, now cancels every unused email link sent for the account. Before, an email change asked for by someone with the password, or a reset link someone else had asked for, kept working after the owner reset or changed the password, and confirming it could hand over the account.
+- Taking back an account whose email was never verified, with a password reset or by signing in with a provider, now also removes its linked providers. With `AllowUnverifiedLogin`, someone who signed up first with another person's address could link their own provider and keep logging in after the owner took the account back. A reset of such an account also turns off its 2FA, and no longer asks for a 2FA code.
+- Turning on 2FA and linking a provider now need a verified email (`403 email_not_verified`).
+- Wrong 2FA codes on `POST /v1/users/me/two-factor/confirm`, `DELETE /v1/users/me/two-factor`, and `POST /v1/users/me/two-factor/recovery-codes` now count toward the same per-user and per-IP guessing limits as logging in. Before, a stolen session could guess codes there without limit.
+- The limit on wrong current passwords is now counted before the password is checked, so concurrent requests can't get past it, and `POST /v1/users/me/password` has the per-IP login limit.
+- Linking a provider to an existing account by its verified email at sign-in now emails the `OAuthLinked` notice, as linking one from settings does.
+- The daily limit on emails to one address is now counted per address and IP, so nobody can use it up to stop the owner getting their own reset and verification emails.
+- Anyone could keep the account-wide login delay running for an email with a wrong password every 15 minutes, which kept its owner from logging in with their password. A login with the password now returns a `device_token`, in the session and in the 2FA challenge; sent with the next `POST /v1/sessions` as `device_token`, it replaces the account-wide count with one for that token alone (5 failures, then the same delays). Web apps keep it in a `__Host-device` cookie (see the Next.js template's changelog), and mobile apps in secure storage. Apps that don't send it work as before.
+
+### Added
+
+- `device_token` in the request to `POST /v1/sessions`, and in login and 2FA challenge responses (`null` except after a login with the password).
+
 ## v1.1.0
 
 Includes the security fix from v1.0.2.

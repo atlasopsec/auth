@@ -86,7 +86,11 @@ paths:
         anywhere within an hour, each further failure makes the next
         attempt wait, from 1 second doubling to 15 minutes; an attempt that
         comes too early gets `429` without the password being checked.
-        Unknown emails are slowed down the same way.
+        Unknown emails are slowed down the same way. A correct password
+        returns a `device_token`; sent with the next login for the same
+        email, it replaces the 20-from-anywhere count with one of its own,
+        5 failures sent with that token, so nobody else can keep the
+        device waiting.
         For a user with 2FA, a correct password returns a challenge instead
         of a session; finish with `POST /v1/two-factor-challenges/verify`.
       tags: [sessions]
@@ -96,7 +100,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/Credentials"
+              $ref: "#/components/schemas/LoginRequest"
       responses:
         "200": { $ref: "#/components/responses/TwoFactorChallenge" }
         "201":
@@ -251,10 +255,13 @@ paths:
       description: >
         Takes the token from the reset link (the part after `#token=`).
         Sets the password, marks the email verified, ends every session,
-        and emails a notice. Doesn't log the user in. When the user has 2FA
-        it also needs a code; without one the response is `422` with
+        cancels every other unused email link, and emails a notice. Doesn't
+        log the user in. When the user has 2FA and a verified email it also
+        needs a code; without one the response is `422` with
         `code: required`, and the page should ask for it and send again. A
-        wrong code counts toward the link's 5 failed attempts.
+        wrong code counts toward the link's 5 failed attempts. If the email
+        had never been verified, the reset takes the account back: linked
+        providers and 2FA are removed too.
       tags: [password-resets]
       security: []
       requestBody:
@@ -289,7 +296,9 @@ paths:
     post:
       operationId: changePassword
       summary: Change my password
-      description: Requires the current password. Ends every other session and emails a notice.
+      description: >
+        Requires the current password. Ends every other session, cancels
+        every unused email link, and emails a notice.
       tags: [users]
       requestBody:
         required: true
@@ -716,7 +725,7 @@ paths:
       description: >
         Returns a new secret for the user's authenticator app, as text and
         as an `otpauth://` URI for a QR code. 2FA isn't on until confirmed.
-        Starting again replaces a pending secret.
+        Starting again replaces a pending secret. Needs a verified email.
       tags: [two-factor]
       requestBody:
         required: true
@@ -736,6 +745,11 @@ paths:
                   otpauth_uri: { type: string }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403":
+          description: "`email_not_verified`: verify the email first."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
         "409": { $ref: "#/components/responses/TwoFactorConflict" }
         "422": { $ref: "#/components/responses/ValidationFailed" }
         "429": { $ref: "#/components/responses/RateLimited" }
@@ -745,7 +759,8 @@ paths:
       summary: Turn off 2FA
       description: >
         Needs the current password and a code (TOTP or recovery). Users
-        who must have 2FA can't.
+        who must have 2FA can't. Wrong codes count toward the same limits
+        as at login.
       tags: [two-factor]
       requestBody:
         required: true
@@ -774,7 +789,8 @@ paths:
       summary: Turn 2FA on
       description: >
         With a working code from the authenticator app. Returns the
-        recovery codes, the only time they're shown.
+        recovery codes, the only time they're shown. Wrong codes count
+        toward the same limits as at login.
       tags: [two-factor]
       requestBody:
         required: true
@@ -792,13 +808,16 @@ paths:
         "401": { $ref: "#/components/responses/Unauthenticated" }
         "409": { $ref: "#/components/responses/TwoFactorConflict" }
         "422": { $ref: "#/components/responses/ValidationFailed" }
+        "429": { $ref: "#/components/responses/RateLimited" }
         "500": { $ref: "#/components/responses/InternalError" }
 
   /v1/users/me/two-factor/recovery-codes:
     post:
       operationId: regenerateRecoveryCodes
       summary: Replace recovery codes
-      description: Needs the current password and a code. The old codes stop working.
+      description: >
+        Needs the current password and a code. The old codes stop working.
+        Wrong codes count toward the same limits as at login.
       tags: [two-factor]
       requestBody:
         required: true
@@ -1009,7 +1028,8 @@ paths:
       description: >
         Like `POST /v1/oauth-flows`, plus the current password if the
         account has one. Finish with `POST /v1/oauth-flows/complete`, sent
-        with the same session. The user is emailed when it's linked.
+        with the same session. The user is emailed when it's linked. Needs
+        a verified email.
       tags: [sessions]
       requestBody:
         required: true
@@ -1037,7 +1057,13 @@ paths:
                   expires_at: { type: string, format: date-time }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthenticated" }
-        "403": { $ref: "#/components/responses/TwoFactorSetupRequired" }
+        "403":
+          description: >
+            `email_not_verified`: verify the email first, or
+            `two_factor_setup_required`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
         "409":
           description: "`oauth_already_linked`: an account with this provider is already linked."
           content:
@@ -1183,6 +1209,21 @@ components:
           description: 12 to 256 characters when signing up.
         client: { type: string, enum: [web, mobile] }
 
+    LoginRequest:
+      type: object
+      additionalProperties: false
+      required: [email, password, client]
+      properties:
+        email: { type: string, maxLength: 254, example: ada@example.com }
+        password: { type: string }
+        client: { type: string, enum: [web, mobile] }
+        device_token:
+          type: string
+          description: >
+            The `device_token` from this browser or app's last login with
+            the password, if it has one. A missing, expired, or invalid
+            token is ignored.
+
     EmailRequest:
       type: object
       additionalProperties: false
@@ -1264,7 +1305,7 @@ components:
 
     LoginResponse:
       type: object
-      required: [user, token, expires_at, absolute_expires_at]
+      required: [user, token, expires_at, absolute_expires_at, device_token]
       properties:
         user: { $ref: "#/components/schemas/User" }
         token:
@@ -1285,6 +1326,13 @@ components:
             The latest the session can last, however often it's used: 90
             days after login, or 12 hours for privileged users. The web
             app's session cookie lasts until then.
+        device_token:
+          type: [string, "null"]
+          description: &deviceToken >
+            Set after a login with the password: keep it on the device
+            (in an `HttpOnly` cookie on the web, in secure storage on
+            mobile) and send it with the next login. It works for a year
+            and only for this email. `null` for other ways to log in.
 
     OAuthAccount:
       type: object
@@ -1394,13 +1442,16 @@ components:
         application/json:
           schema:
             type: object
-            required: [two_factor_required, challenge_token, expires_at]
+            required: [two_factor_required, challenge_token, expires_at, device_token]
             properties:
               two_factor_required: { type: boolean, const: true }
               challenge_token:
                 type: string
                 description: Proves the password step. Keep it secret, like a session token.
               expires_at: { type: string, format: date-time }
+              device_token:
+                type: [string, "null"]
+                description: *deviceToken
     InvalidTwoFactorCode:
       description: "`invalid_two_factor_code`: the code is wrong or was already used."
       content:

@@ -1,4 +1,4 @@
-// From the auth module's Next.js template (github.com/atlasopsec/auth, templates/nextjs), version 0.2.0.
+// From the auth module's Next.js template (github.com/atlasopsec/auth, templates/nextjs), version 0.3.0.
 // The session cookie. The __Host- prefix makes browsers require Secure,
 // Path=/, and no Domain, so it only ever goes to this exact site.
 export const SESSION_COOKIE = "__Host-session";
@@ -6,6 +6,21 @@ export const SESSION_COOKIE = "__Host-session";
 // Holds a 2FA challenge between the password and the code, so the token
 // stays out of the address bar and the page.
 export const TWO_FACTOR_COOKIE = "__Host-two-factor";
+
+// Holds the device token from the browser's last login with the password.
+// Sent with the next login, it keeps other people's wrong passwords for
+// the same email from making this browser wait.
+export const DEVICE_COOKIE = "__Host-device";
+
+// deviceCookieOptions keep the device token for a year, as long as the Go
+// API accepts it.
+export const deviceCookieOptions: CookieOptions = {
+  httpOnly: true,
+  secure: true,
+  sameSite: "lax",
+  path: "/",
+  maxAge: 365 * 24 * 60 * 60,
+};
 
 // Holds an invitation's token while the user logs in or signs up, so it
 // survives the trip without going into a URL.

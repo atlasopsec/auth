@@ -159,3 +159,52 @@ func TestSubjects(t *testing.T) {
 		t.Errorf("Email: %q and %q, want the same 64-character hash", a, b)
 	}
 }
+
+func TestHitUndoable(t *testing.T) {
+	t.Parallel()
+	c := &clock{t: time.Date(2026, 1, 1, 12, 15, 0, 0, time.UTC)}
+	l := ratelimit.New(testdb.NewMigrated(t), c.now)
+	ctx := context.Background()
+
+	// Undone hits, including a window's only one, don't count.
+	for i := range 2 * rule.Limit {
+		ok, _, undo, err := l.HitUndoable(ctx, rule, "a")
+		if err != nil || !ok {
+			t.Fatalf("hit %d: ok %v, err %v; want allowed", i+1, ok, err)
+		}
+		if err := undo(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if reached, _, err := l.Reached(ctx, rule, "a"); err != nil || reached {
+		t.Fatalf("reached %v, err %v; want undone hits not to count", reached, err)
+	}
+
+	// Kept hits count, as with Hit.
+	for i := range rule.Limit {
+		if ok, _, _, err := l.HitUndoable(ctx, rule, "a"); err != nil || !ok {
+			t.Fatalf("kept hit %d: ok %v, err %v; want allowed", i+1, ok, err)
+		}
+	}
+	ok, retry, undo, err := l.HitUndoable(ctx, rule, "a")
+	if err != nil || ok || undo != nil || retry != 45*time.Minute {
+		t.Fatalf("over the limit: ok %v, retry %v, undo %v, err %v; want refused for 45m with no undo", ok, retry, undo != nil, err)
+	}
+
+	// An undo after the window ended doesn't touch the next window.
+	late := ratelimit.Rule{Name: "late", Limit: 1, Window: time.Hour}
+	_, _, lateUndo, err := l.HitUndoable(ctx, late, "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.set(time.Date(2026, 1, 1, 13, 0, 0, 0, time.UTC))
+	if ok, _, _ := l.Hit(ctx, late, "a"); !ok {
+		t.Fatal("refused in the next window")
+	}
+	if err := lateUndo(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if reached, _, _ := l.Reached(ctx, late, "a"); !reached {
+		t.Error("an undo from the last window took back a hit in this one")
+	}
+}

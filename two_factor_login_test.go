@@ -409,7 +409,7 @@ func TestVerificationLinkStartsChallenge(t *testing.T) {
 	t.Parallel()
 	f := setup(t, Hooks{})
 	l := f.signUp(t, testEmail)
-	secret, _ := f.enableTwoFactor(t, l.Token)
+	secret, _ := f.enableTwoFactorUnverified(t, l.Token)
 	link := f.emailTokenOf(t, testEmail, 0)
 	body := func(pw string) string {
 		b, _ := json.Marshal(map[string]string{"token": link, "password": pw, "client": "web"})

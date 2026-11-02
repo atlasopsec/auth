@@ -132,6 +132,15 @@ func (q *Queries) DeleteSpentOAuthFlows(ctx context.Context, now time.Time) (int
 	return result.RowsAffected(), nil
 }
 
+const deleteUserOAuthAccounts = `-- name: DeleteUserOAuthAccounts :exec
+DELETE FROM auth.oauth_accounts WHERE user_id = $1
+`
+
+func (q *Queries) DeleteUserOAuthAccounts(ctx context.Context, userID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, deleteUserOAuthAccounts, userID)
+	return err
+}
+
 const getOAuthAccount = `-- name: GetOAuthAccount :one
 SELECT id, user_id, provider, provider_user_id, email, created_at, updated_at FROM auth.oauth_accounts WHERE provider = $1 AND provider_user_id = $2
 `

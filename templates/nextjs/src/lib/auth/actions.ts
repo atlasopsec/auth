@@ -1,6 +1,6 @@
 "use server";
 
-// From the auth module's Next.js template (github.com/atlasopsec/auth, templates/nextjs), version 0.2.0.
+// From the auth module's Next.js template (github.com/atlasopsec/auth, templates/nextjs), version 0.3.0.
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { z } from "zod";
@@ -12,9 +12,11 @@ import {
   signUpSchema,
 } from "@/lib/api/schemas";
 import {
+  DEVICE_COOKIE,
   SESSION_COOKIE,
   TWO_FACTOR_COOKIE,
   clearedCookie,
+  deviceCookieOptions,
 } from "@/lib/auth/cookies";
 import {
   SOMETHING_WENT_WRONG,
@@ -55,17 +57,26 @@ export async function logIn(
     return { fieldErrors: fieldErrors(parsed.error), values };
   }
   const next = safeNext(formData.get("next"));
+  const store = await cookies();
+  const deviceToken = store.get(DEVICE_COOKIE)?.value;
 
   let result;
   try {
     result = await callApi("/v1/sessions", loginOrChallengeSchema, {
       method: "POST",
-      body: { ...parsed.data, client: "web" },
+      body: {
+        ...parsed.data,
+        client: "web",
+        ...(deviceToken ? { device_token: deviceToken } : {}),
+      },
     });
   } catch (e) {
     return stateFromError(e, values);
   }
 
+  if (result.device_token) {
+    store.set(DEVICE_COOKIE, result.device_token, deviceCookieOptions);
+  }
   return finishLogin(result, next ?? (await afterLogin()));
 }
 

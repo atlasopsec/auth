@@ -454,9 +454,10 @@ POST /v1/email-verifications/confirm
   - sets the new password (policy and breach check apply),
   - **marks the email verified**, since the user just proved they control it,
   - **ends all sessions** (the standard),
+  - **cancels every unused email link** sent for the account, such as a pending email change or another reset link: whoever the reset is locking out may have asked for them,
   - sends "your password was changed".
 - It doesn't log the user in. They log in with the new password.
-- **(Decision)** Marking the email verified is what lets a reset take over a squatted account: the attacker's password is replaced and their sessions end.
+- **(Decision)** Marking the email verified is what lets a reset take over a squatted account: the attacker's password is replaced and their sessions end. If the email had never been verified, the reset also removes everything else a squatter could have added, as signing in with a provider does (§9): linked providers and 2FA. So it doesn't ask for a 2FA code then.
 - Accounts that only use OAuth can use reset to add a password.
 
 #### Password change
@@ -464,7 +465,7 @@ POST /v1/email-verifications/confirm
 `POST /v1/users/me/password` with `{ "current_password": "…", "new_password": "…" }`:
 
 - A wrong current password returns `422 validation_failed` with `current_password: incorrect`. It isn't `401`, which would make the app think the user was logged out.
-- Ends all **other** sessions (the standard) and sends "your password was changed".
+- Ends all **other** sessions (the standard), cancels every unused email link sent for the account, as a reset does, and sends "your password was changed".
 - OAuth-only accounts have no current password, so they use reset instead.
 
 #### Email change (Decision)
@@ -745,6 +746,7 @@ type Config struct {
 | `DELETE /v1/users/me/two-factor` | `{ current_password, code }` | `204`. Refused (`403 two_factor_required`) if the user must have 2FA |
 | `POST /v1/users/me/two-factor/recovery-codes` | `{ current_password, code }` | `200 { recovery_codes: [10] }`, replacing the old ones |
 
+- **Setup needs a verified email** (`403 email_not_verified`). Until then the account may have been created by someone else with this address, and 2FA they turned on would stand in the way of the owner's password reset.
 - **Setup needs the current password,** like other account-security changes. Confirming needs a working code from the app, so a bad scan can't lock anyone out (the standard).
 - **`otpauth_uri`** is the standard `otpauth://totp/…` link with the app name as issuer. The client turns it into a QR code; `secret` is for typing in by hand. Both are shown only during setup.
 - **Code settings:** 6 digits, 30-second steps, SHA-1. That's what every authenticator app supports.
@@ -807,6 +809,7 @@ Rate limiting arrives in step 8. Until then, someone who already has the passwor
 
 - **The limit:** after **10 wrong codes in 15 minutes** across all of a user's challenges and password resets, logging in for that user stops issuing challenges until the 15 minutes pass (`429 rate_limited`, with `Retry-After`). Codes sent to challenges started earlier, and to password resets, get the same `429`, so challenges opened ahead of time can't be used to keep guessing.
 - **It's a temporary pause, not a lockout,** in line with the standard's "slow down, don't lock out".
+- **Every endpoint that takes a code counts toward it,** including confirming setup, turning 2FA off, and regenerating recovery codes, where a wrong code is `422 validation_failed` with `code: incorrect`. Otherwise a stolen session could guess codes there without limit.
 - **The user is emailed when it trips:** "someone entered your password correctly but not your 2FA code; change your password". By then someone has their password.
 
 ### Password reset with 2FA (Decision)
@@ -977,7 +980,7 @@ When a provider confirms who the user is:
    - **Not verified:** refused with `403 oauth_email_not_verified` ("Verify your email with Google first"). Nothing is created.
 3. **An existing account with that email:**
    - **If its email is verified,** the provider is linked to it and the user is logged in. That's the same trust as a password reset link to that inbox.
-   - **If its email isn't verified,** this is §2's pre-hijacking case: someone may have signed up with this address first. Its password, sessions, 2FA, and pending email tokens are deleted. Then the email is marked verified, the provider is linked, and the real owner is logged in. A password reset already takes back such an account the same way.
+   - **If its email isn't verified,** this is §2's pre-hijacking case: someone may have signed up with this address first. Its password, sessions, 2FA, pending email tokens, and linked providers are deleted. Then the email is marked verified, the provider is linked, and the real owner is logged in. A password reset takes back such an account the same way.
 4. **No account** → a new user with that email, already verified, with no password. `OnUserCreated` runs, as for any sign-up. If it returns `ErrSignUpNotAllowed`, nothing is created and the answer is `403 sign_up_not_allowed`. The provider has already shown that the user owns the address, so this reveals nothing to anyone else.
 
 Then, like every other way in:
@@ -999,9 +1002,10 @@ Then, like every other way in:
 - **Accounts without a password** (OAuth only) link and unlink with their session alone. The only other proof they could give is another provider round trip, which adds a lot of flow for little gain. The notices below cover them.
 - **A provider account already linked to another user** returns `409 oauth_account_in_use`. Accounts are never moved silently.
 - **One account per provider per user.** Trying a second answers `409 oauth_already_linked`.
+- **Linking needs the account's email to be verified** (`403 email_not_verified`). Until then the account may have been created by someone else with this address, who could link their own provider to keep a way in after the owner takes it back.
 - **Linking doesn't need a verified provider email.** The user is logged in and asked for it, and the account is matched by provider user ID from then on. The provider's address is kept only to show in settings, and may be empty.
 - **Linking finishes only with the same user's session,** and that user's flow.
-- **Notices:** the user is emailed when a provider is linked or unlinked, with new `Emails` templates `OAuthLinked` and `OAuthUnlinked`.
+- **Notices:** the user is emailed when a provider is linked or unlinked, with new `Emails` templates `OAuthLinked` and `OAuthUnlinked`. That includes a provider linked at sign-in by its verified email (above), which the user didn't ask for: whoever controls an identity with that verified address, such as an admin of the email's domain, now has a way in.
 
 ### Accounts without a password (Decision)
 
@@ -1102,10 +1106,11 @@ Every limit answers `429 rate_limited` with `Retry-After`, the code §8 already 
 | Login attempts (`POST /v1/sessions`, the verification link, 2FA challenge codes, OAuth completion, Apple sign-in) | IP | 30 per 10 minutes |
 | Sign-ups | IP | 10 per hour |
 | Emails to an address (verification, password reset, email change, invitation) | IP | 10 per hour |
-| | Address | 10 per day, on top of the 60-second cooldown |
+| | Address and IP | 10 per day, on top of the 60-second cooldown |
 | Starting OAuth flows | IP | 30 per 10 minutes |
 | Wrong 2FA codes | IP | 30 per hour, on top of §8's per-user limit |
-| Wrong current passwords on logged-in endpoints (2FA setup, password change, email change, linking) | User | 10 per hour |
+| Wrong current passwords on logged-in endpoints (2FA setup, password change, email change, linking) | User | 10 per hour, each attempt counted before the password is checked and taken back if it's right |
+| Password change | IP | The login limit: 30 per 10 minutes |
 
 - **Per IP, generously:** offices and mobile carriers put many people behind one address, so per-IP limits stop scripts, not crowds.
 - **IPv6 is counted per `/64`,** since one device can use many addresses in its block. IPv4 counts per address.
@@ -1113,6 +1118,7 @@ Every limit answers `429 rate_limited` with `Retry-After`, the code §8 already 
 - **No configuration at first.** These are defaults every project gets; knobs can be added later if one needs different numbers.
 - **The last row** covers a gap left in step 6, where a stolen session plus repeated password guesses on the logged-in endpoints had no limit.
 - **The login limit also covers `POST /v1/password-resets/confirm`,** which takes 2FA codes too.
+- **The per-address limit is also per IP,** so nobody can use up an address's allowance and stop its owner getting their own reset and verification emails. The per-account cooldown still caps how often those are sent.
 - **Per-IP limits count every request; the wrong-code limit counts only wrong codes.** Once a limit is reached, requests are refused without being checked.
 
 ### Failed logins slow down, never lock (Decision)
@@ -1125,6 +1131,11 @@ The standard: "slow down further attempts (growing delays) instead of locking th
 - **A correct password clears** that IP's count for the account.
 - **Unknown emails are counted exactly like real ones,** so the delays don't reveal whether an account exists.
 - **The real owner on another network** is only slowed by the per-account delays, which need many failures from everywhere. An attacker hammering the account from one IP only slows themselves.
+- **Devices that have logged in before skip the per-account delays (Decision).** Without this, anyone could keep the per-account delay running with a wrong password every 15 minutes from a few IPs, and the owner could never log in with their password: a lockout in all but name. So a correct password returns a `device_token`, in the session and in the 2FA challenge, which the client keeps (an `HttpOnly` `__Host-device` cookie on the web, secure storage on mobile) and sends with its next login as `device_token`:
+  - **With a valid token for that email,** the per-account count is replaced by the token's own: the same delays after **5 wrong passwords sent with that token**, from any IP. So a stolen token can't be used to guess faster than one IP can, and other people's failures don't slow the device down. The per-account-and-IP count still applies.
+  - **The token** is sealed with `Config.EncryptionKey` (AES-256-GCM, as for 2FA secrets), bound to the hashed email, and holds when it was issued and a random ID that names its count. It works for **a year**, and every login with the password issues a new one. Nothing is stored, so there's no migration, and it can't be revoked; it doesn't need to be, since it lets nobody in by itself. Changing the email or the encryption key makes old tokens ignored.
+  - **Missing, expired, tampered, or another email's tokens are ignored,** and the login is held to the per-account count as before. Other ways to log in answer `device_token: null`.
+  - **Mobile apps** should keep the token in `expo-secure-store` with the session token, and send it with every password login.
 - **Counts start over after an hour without failures** for that key. The exact schedule: no wait after the first 5 failures (20 per account); after the next failure 1 second, then 2, 4, and so on, capped at 15 minutes.
 - **Stored in `auth.login_failures`** (migration `00009`), one row per key with its count and the time the next attempt is allowed. Emails appear only as hashes. The cleanup job deletes rows an hour after their last failure, once their wait is over.
 - **Concurrent attempts** that arrive in the same instant can each be checked before either failure is counted. The per-IP login limit (30 per 10 minutes) bounds that.
@@ -1193,7 +1204,7 @@ Confirmed in review on 2026-10-29:
 
 1. **Rate limits in Postgres,** with fixed windows and one atomic statement per check.
 2. **The limits in the table above:** generous per IP, with IPv6 counted per `/64`, and no configuration at first.
-3. **Failed logins:** delays doubling up to 15 minutes, after 5 failures per account and IP, or 20 per account per hour from everywhere. Never a lockout, and unknown emails are treated the same.
+3. **Failed logins:** delays doubling up to 15 minutes, after 5 failures per account and IP, or 20 per account per hour from everywhere. Never a lockout, and unknown emails are treated the same. Devices with a device token from an earlier login count their own failures in place of the per-account ones, so nobody else can keep them waiting.
 4. **The event log:** the events listed, IDs only, best effort, kept for 1 year, `a.Events` for tooling, and `Hooks.OnEvent`.
 5. **New-device emails:** on by default, a 90-day memory of user agent and network, and a config switch to turn them off.
 6. **An hourly cleanup job** for everything that expires, on by default.

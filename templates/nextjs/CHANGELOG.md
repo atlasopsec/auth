@@ -2,6 +2,12 @@
 
 Changes to the Next.js template. Projects that copied it can check here what to copy again.
 
+## 0.3.0
+
+Works with the auth module's `v1.0.0` and later; the device token needs `v1.2.0`. Every copied file's header comment now says 0.3.0, but files not named here are otherwise unchanged.
+
+- **Security:** keeps the `device_token` from a login with the password in a `__Host-device` cookie for a year, and sends it with the next login, so other people's wrong passwords for the same email can't make the browser wait. Copy `src/lib/auth/actions.ts`, `src/lib/auth/cookies.ts`, and `src/lib/api/schemas.ts`.
+
 ## 0.2.0
 
 Works with the auth module's `v1.0.0` and later. Copy again the files named below. Every copied file's header comment now says 0.2.0, but files not named here are otherwise unchanged.

@@ -122,6 +122,13 @@ func (a *Auth) startTwoFactor(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteDecodeError(w, r, err)
 		return
 	}
+	// Until the email is verified, the account may belong to someone else
+	// with this address, who takes it back with a password reset. 2FA set
+	// up by a squatter would stand in their way.
+	if !c.user.EmailVerified {
+		writeEmailNotVerified(w, r)
+		return
+	}
 	if !a.requirePassword(w, r, c.user.ID) {
 		return
 	}
@@ -179,6 +186,7 @@ func (a *Auth) confirmTwoFactor(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var codes []string
+	var check codeCheck
 	err := a.inTx(r.Context(), func(q *db.Queries) error {
 		row, err := q.GetTOTPSecretForUpdate(r.Context(), c.user.ID)
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -195,9 +203,17 @@ func (a *Auth) confirmTwoFactor(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		now := a.now().UTC().Truncate(time.Microsecond)
-		step, ok := totp.Verify(secret, req.Code, now, row.LastUsedStep)
-		if !ok {
-			return errBadCode
+		var step int64
+		check, err = a.checkCodeLimited(r.Context(), q, c.user.ID, a.clientIP(r), func() (bool, error) {
+			var ok bool
+			if step, ok = totp.Verify(secret, req.Code, now, row.LastUsedStep); !ok {
+				return false, errBadCode
+			}
+			return false, nil
+		})
+		if err != nil || !check.ok {
+			// A wrong code is committed, so it counts.
+			return err
 		}
 		if err := q.ConfirmTOTPSecret(r.Context(), db.ConfirmTOTPSecretParams{UserID: c.user.ID, Step: step, Now: &now}); err != nil {
 			return fmt.Errorf("confirming 2FA: %w", err)
@@ -206,6 +222,10 @@ func (a *Auth) confirmTwoFactor(w http.ResponseWriter, r *http.Request) {
 		return err
 	})
 	if a.writeTwoFactorError(w, r, err) {
+		return
+	}
+	if !check.ok {
+		a.wrongTwoFactorCode(w, r, c.user.ID, c.user.Email, check)
 		return
 	}
 	a.logEvent(r, "auth: two-factor enabled", c.user.ID)
@@ -267,8 +287,10 @@ func (a *Auth) disableTwoFactor(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	var check codeCheck
 	err = a.inTx(r.Context(), func(q *db.Queries) error {
-		if _, err := a.checkSecondFactor(r.Context(), q, c.user.ID, req.Code); err != nil {
+		if check, err = a.checkLoginCode(r.Context(), q, c.user.ID, req.Code, a.clientIP(r)); err != nil || !check.ok {
+			// A wrong code is committed, so it counts.
 			return err
 		}
 		if err := q.DeleteTOTPSecret(r.Context(), c.user.ID); err != nil {
@@ -280,6 +302,10 @@ func (a *Auth) disableTwoFactor(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 	if a.writeTwoFactorError(w, r, err) {
+		return
+	}
+	if !check.ok {
+		a.wrongTwoFactorCode(w, r, c.user.ID, c.user.Email, check)
 		return
 	}
 	a.logEvent(r, "auth: two-factor disabled", c.user.ID)
@@ -306,14 +332,20 @@ func (a *Auth) regenerateRecoveryCodes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var codes []string
+	var check codeCheck
 	err = a.inTx(r.Context(), func(q *db.Queries) error {
-		if _, err := a.checkSecondFactor(r.Context(), q, c.user.ID, req.Code); err != nil {
+		if check, err = a.checkLoginCode(r.Context(), q, c.user.ID, req.Code, a.clientIP(r)); err != nil || !check.ok {
+			// A wrong code is committed, so it counts.
 			return err
 		}
 		codes, err = a.replaceRecoveryCodes(r.Context(), q, c.user.ID)
 		return err
 	})
 	if a.writeTwoFactorError(w, r, err) {
+		return
+	}
+	if !check.ok {
+		a.wrongTwoFactorCode(w, r, c.user.ID, c.user.Email, check)
 		return
 	}
 	a.logEvent(r, "auth: recovery codes regenerated", c.user.ID)
@@ -383,6 +415,18 @@ func writeTwoFactorNotEnabled(w http.ResponseWriter, r *http.Request) {
 	httpapi.WriteError(w, r, http.StatusConflict, "two_factor_not_enabled", "Two-factor authentication isn't on.", nil)
 }
 
+// wrongTwoFactorCode answers a wrong code on a logged-in 2FA endpoint,
+// warning the user if it reached the guessing limit. It's a field error,
+// not a 401: the user is logged in.
+func (a *Auth) wrongTwoFactorCode(w http.ResponseWriter, r *http.Request, userID uuid.UUID, email string, check codeCheck) {
+	a.logEvent(r, "auth: wrong two-factor code", userID)
+	if check.tripped {
+		a.logEvent(r, "auth: two-factor guessing limit reached", userID)
+		a.sendNotice(email, a.emails.TwoFactorGuessing)
+	}
+	writeValidationFailed(w, r, []httpapi.FieldError{codeIncorrect})
+}
+
 // writeTwoFactorError writes the response for an error from the 2FA
 // endpoints, and reports whether there was one. A wrong code is a field
 // error, not a 401: the user is logged in.
@@ -392,6 +436,8 @@ func (a *Auth) writeTwoFactorError(w http.ResponseWriter, r *http.Request, err e
 		return false
 	case errors.Is(err, errBadCode):
 		writeValidationFailed(w, r, []httpapi.FieldError{codeIncorrect})
+	case errors.As(err, new(pausedError)):
+		a.writeLoginCodeError(w, r, err)
 	case errors.Is(err, errNoPendingSetup):
 		httpapi.WriteError(w, r, http.StatusConflict, "two_factor_setup_not_started", "Start setting up two-factor authentication first.", nil)
 	case errors.Is(err, errTwoFactorAlreadyEnabled):

@@ -47,6 +47,10 @@ func New(conn db.DBTX, now func() time.Time) *Limiter {
 // window ends.
 func (l *Limiter) Hit(ctx context.Context, rule Rule, subject string) (ok bool, retryAfter time.Duration, err error) {
 	now, start, end := l.window(rule)
+	return l.hit(ctx, rule, subject, now, start, end)
+}
+
+func (l *Limiter) hit(ctx context.Context, rule Rule, subject string, now, start, end time.Time) (ok bool, retryAfter time.Duration, err error) {
 	id, err := uuid.NewV7()
 	if err != nil {
 		return false, 0, fmt.Errorf("ratelimit: generating ID: %w", err)
@@ -61,6 +65,29 @@ func (l *Limiter) Hit(ctx context.Context, rule Rule, subject string) (ok bool, 
 		return false, end.Sub(now), nil
 	}
 	return true, 0, nil
+}
+
+// HitUndoable is Hit for a limit on failures, where whether a request
+// failed is only known after it's been handled. Counting it first means
+// concurrent requests can't all get past the limit before any failure is
+// counted. If the request turns out not to have failed, call undo to take
+// the hit back. undo is nil when ok is false or err is set.
+func (l *Limiter) HitUndoable(ctx context.Context, rule Rule, subject string) (ok bool, retryAfter time.Duration, undo func(context.Context) error, err error) {
+	now, start, end := l.window(rule)
+	ok, retryAfter, err = l.hit(ctx, rule, subject, now, start, end)
+	if err != nil || !ok {
+		return ok, retryAfter, nil, err
+	}
+	undo = func(ctx context.Context) error {
+		err := l.q.UndoRateLimitHit(ctx, db.UndoRateLimitHitParams{
+			Key: key(rule, subject), WindowStart: start, Now: l.now().UTC().Truncate(time.Microsecond),
+		})
+		if err != nil {
+			return fmt.Errorf("ratelimit: undoing %s: %w", rule.Name, err)
+		}
+		return nil
+	}
+	return true, 0, undo, nil
 }
 
 // Reached reports whether subject has already used up rule's limit, without

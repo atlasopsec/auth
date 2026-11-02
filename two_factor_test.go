@@ -6,6 +6,7 @@ import (
 	"encoding/base32"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"regexp"
 	"strings"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/atlasopsec/auth/internal/db"
 	"github.com/atlasopsec/auth/internal/recoverycode"
+	"github.com/atlasopsec/auth/internal/token"
 	"github.com/atlasopsec/auth/internal/totp"
 )
 
@@ -36,9 +38,40 @@ func codeBody(code string) string {
 	return string(b)
 }
 
-// startSetup starts 2FA setup and returns the secret.
+// verifyByToken marks the email of tok's user verified, as clicking the
+// verification link would. 2FA can only be set up with a verified email.
+func (f fixture) verifyByToken(t *testing.T, tok string) {
+	t.Helper()
+	if _, err := f.pool.Exec(context.Background(), `UPDATE auth.users SET email_verified_at = now()
+		WHERE email_verified_at IS NULL AND id = (SELECT user_id FROM auth.sessions WHERE token_hash = $1)`, token.Hash(tok)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// enableTwoFactorUnverified turns 2FA on for tok's user and then marks their
+// email unverified again: an account that turned 2FA on before setting it
+// up needed a verified email, or a squatter's from then.
+func (f fixture) enableTwoFactorUnverified(t *testing.T, tok string) ([]byte, []string) {
+	t.Helper()
+	secret, codes := f.enableTwoFactor(t, tok)
+	f.unverifyByToken(t, tok)
+	return secret, codes
+}
+
+// unverifyByToken marks the email of tok's user unverified again.
+func (f fixture) unverifyByToken(t *testing.T, tok string) {
+	t.Helper()
+	if _, err := f.pool.Exec(context.Background(), `UPDATE auth.users SET email_verified_at = NULL
+		WHERE id = (SELECT user_id FROM auth.sessions WHERE token_hash = $1)`, token.Hash(tok)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// startSetup verifies the user's email, then starts 2FA setup and returns
+// the secret.
 func (f fixture) startSetup(t *testing.T, tok string) []byte {
 	t.Helper()
+	f.verifyByToken(t, tok)
 	res := f.do(t, http.MethodPost, "/v1/users/me/two-factor", pwBody(testPassword), withToken(tok))
 	if res.status != http.StatusCreated {
 		t.Fatalf("starting 2FA setup: status %d, body %s", res.status, res.body)
@@ -96,6 +129,7 @@ func TestTwoFactorSetup(t *testing.T) {
 	t.Parallel()
 	f := setup(t, Hooks{})
 	l := f.signUp(t, testEmail)
+	f.verifyByToken(t, l.Token)
 
 	res := f.do(t, http.MethodPost, "/v1/users/me/two-factor", pwBody(testPassword), withToken(l.Token))
 	if res.status != http.StatusCreated {
@@ -177,6 +211,7 @@ func TestTwoFactorSetupRejects(t *testing.T) {
 	t.Parallel()
 	f := setup(t, Hooks{})
 	l := f.signUp(t, testEmail)
+	f.verifyByToken(t, l.Token)
 
 	tests := []struct {
 		name       string
@@ -510,5 +545,88 @@ func TestCodeCheckLocksTheSecret(t *testing.T) {
 	}
 	if res := <-result; res.status != http.StatusUnprocessableEntity {
 		t.Errorf("status %d, body %s; want 422 (code already used)", res.status, res.body)
+	}
+}
+
+// TestLoggedInCodeGuessingIsLimited checks that the 2FA endpoints for a
+// logged-in user count wrong codes toward the same guessing limit as
+// logging in, so a stolen session can't be used to guess codes.
+func TestLoggedInCodeGuessingIsLimited(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		// prepare sets up 2FA as the endpoint needs, and returns the secret.
+		prepare func(f fixture, tok string) []byte
+		path    string
+		method  string
+		body    func(code string) string
+	}{
+		{"confirm setup", func(f fixture, tok string) []byte { return f.startSetup(t, tok) },
+			"/v1/users/me/two-factor/confirm", http.MethodPost, codeBody},
+		{"turn off", func(f fixture, tok string) []byte { s, _ := f.enableTwoFactor(t, tok); return s },
+			"/v1/users/me/two-factor", http.MethodDelete, func(code string) string { return pwCodeBody(testPassword, code) }},
+		{"new recovery codes", func(f fixture, tok string) []byte { s, _ := f.enableTwoFactor(t, tok); return s },
+			"/v1/users/me/two-factor/recovery-codes", http.MethodPost, func(code string) string { return pwCodeBody(testPassword, code) }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			f := setup(t, Hooks{})
+			l := f.signUp(t, testEmail)
+			secret := tt.prepare(f, l.Token)
+			for i := range guessLimit {
+				res := f.do(t, tt.method, tt.path, tt.body(f.wrongCode(secret)), withToken(l.Token), fromIP(nextTestIP()))
+				wantDetail(t, fmt.Sprintf("wrong code %d", i+1), res, "code:incorrect")
+			}
+			if !strings.Contains(f.logs.String(), "two-factor guessing limit reached") {
+				t.Error("reaching the limit wasn't logged")
+			}
+			// Even the right code is refused until the window passes.
+			wantRateLimited(t, "right code after the limit", f.do(t, tt.method, tt.path, tt.body(f.code(secret)), withToken(l.Token), fromIP(nextTestIP())))
+			f.clock.advance(guessWindow)
+			if res := f.do(t, tt.method, tt.path, tt.body(f.code(secret)), withToken(l.Token)); res.status >= 300 {
+				t.Errorf("after the window: status %d, body %s", res.status, res.body)
+			}
+		})
+	}
+}
+
+// TestLoggedInWrongCodesCountPerIP checks the per-IP wrong-code limit
+// covers the logged-in 2FA endpoints too.
+func TestLoggedInWrongCodesCountPerIP(t *testing.T) {
+	t.Parallel()
+	f := setup(t, Hooks{})
+	ip := nextTestIP()
+	var last struct {
+		tok    string
+		secret []byte
+	}
+	// A new user every few guesses, so only the per-IP limit is reached.
+	for i := range limitWrongCodes.Limit {
+		if i%(guessLimit-1) == 0 {
+			l := f.signUp(t, fmt.Sprintf("user%d@example.com", i))
+			last.tok, last.secret = l.Token, f.startSetup(t, l.Token)
+		}
+		res := f.do(t, http.MethodPost, "/v1/users/me/two-factor/confirm", codeBody(f.wrongCode(last.secret)), withToken(last.tok), fromIP(ip))
+		wantDetail(t, fmt.Sprintf("wrong code %d", i+1), res, "code:incorrect")
+	}
+	l := f.signUp(t, "fresh@example.com")
+	secret := f.startSetup(t, l.Token)
+	wantRateLimited(t, "another user from the same IP", f.do(t, http.MethodPost, "/v1/users/me/two-factor/confirm", codeBody(f.code(secret)), withToken(l.Token), fromIP(ip)))
+}
+
+// TestUnverifiedEmailCannotAddWaysIn checks that until an account's email
+// is verified, it can't turn on 2FA or link a provider. A squatter who
+// signed up with someone else's address could otherwise keep a way in
+// after the owner takes it back.
+func TestUnverifiedEmailCannotAddWaysIn(t *testing.T) {
+	t.Parallel()
+	f := setupOAuth(t, Config{AllowUnverifiedLogin: true})
+	l := f.signUp(t, testEmail)
+	wantError(t, "2FA setup", f.do(t, http.MethodPost, "/v1/users/me/two-factor", pwBody(testPassword), withToken(l.Token)), 403, "email_not_verified")
+	wantError(t, "linking a provider", f.do(t, http.MethodPost, "/v1/users/me/oauth-accounts", linkBody(providerGitHub, challengeOf(token.New()), testPassword), withToken(l.Token)), 403, "email_not_verified")
+	var pending int
+	if err := f.pool.QueryRow(context.Background(), `SELECT count(*) FROM auth.totp_secrets`).Scan(&pending); err != nil || pending != 0 {
+		t.Errorf("%d 2FA secrets (%v), want 0", pending, err)
 	}
 }

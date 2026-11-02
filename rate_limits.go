@@ -17,9 +17,13 @@ var (
 	limitLogin  = ratelimit.Rule{Name: "login:ip", Limit: 30, Window: 10 * time.Minute}
 	limitSignUp = ratelimit.Rule{Name: "signup:ip", Limit: 10, Window: time.Hour}
 	// limitEmailIP and limitEmailAddress cover requests that email an
-	// address the caller chose.
+	// address the caller chose. limitEmailAddress counts per address and
+	// IP, so nobody can use up an address's limit to stop its owner
+	// getting their own reset or verification emails. The per-user
+	// cooldown on email links still caps how often one address is sent
+	// those.
 	limitEmailIP      = ratelimit.Rule{Name: "email:ip", Limit: 10, Window: time.Hour}
-	limitEmailAddress = ratelimit.Rule{Name: "email:address", Limit: 10, Window: 24 * time.Hour}
+	limitEmailAddress = ratelimit.Rule{Name: "email:address-ip", Limit: 10, Window: 24 * time.Hour}
 	limitOAuthStart   = ratelimit.Rule{Name: "oauth:ip", Limit: 30, Window: 10 * time.Minute}
 	// limitWrongCodes counts wrong 2FA codes, on top of the per-user
 	// guessing limit (§8).
@@ -47,10 +51,11 @@ func (a *Auth) limitIP(rule ratelimit.Rule, h http.Handler) http.Handler {
 }
 
 // allowEmailTo counts a request that emails addr, writing 429 and returning
-// false if the address has had too many today. It's counted whether or
-// not the address has an account, so it reveals nothing.
+// false if the address has had too many today from the client's IP. It's
+// counted whether or not the address has an account, so it reveals
+// nothing.
 func (a *Auth) allowEmailTo(w http.ResponseWriter, r *http.Request, addr string) bool {
-	ok, retry, err := a.limiter.Hit(r.Context(), limitEmailAddress, ratelimit.Email(addr))
+	ok, retry, err := a.limiter.Hit(r.Context(), limitEmailAddress, ratelimit.Email(addr)+":"+a.clientIP(r))
 	if err != nil {
 		httpapi.WriteInternalError(w, r, a.log, err)
 		return false

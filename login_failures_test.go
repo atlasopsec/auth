@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -134,6 +135,8 @@ func TestWrongCurrentPasswordLimit(t *testing.T) {
 	f := setup(t, Hooks{})
 	ada := f.signUp(t, testEmail)
 	grace := f.signUp(t, "grace@example.com")
+	f.verifyByToken(t, ada.Token)
+	f.verifyByToken(t, grace.Token)
 	start := func(tok, pw string) response {
 		return f.do(t, http.MethodPost, "/v1/users/me/two-factor", pwBody(pw), withToken(tok))
 	}
@@ -175,4 +178,56 @@ func TestCleanupLoginFailures(t *testing.T) {
 	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM auth.login_failures`).Scan(&n); err != nil || n != 3 {
 		t.Errorf("%d rows left (%v), want 3: the new email's two, and the waiting one", n, err)
 	}
+}
+
+// TestWrongCurrentPasswordLimitHoldsConcurrently checks that guesses sent
+// at once can't all get past the limit before any is counted.
+func TestWrongCurrentPasswordLimitHoldsConcurrently(t *testing.T) {
+	t.Parallel()
+	f := setup(t, Hooks{})
+	l := f.signUp(t, testEmail)
+	const n = 2 * 10
+	if limitWrongPassword.Limit != 10 {
+		t.Fatalf("limit is %d; update n", limitWrongPassword.Limit)
+	}
+	results := make(chan int, n)
+	var wg sync.WaitGroup
+	for range n {
+		ip := nextTestIP()
+		wg.Go(func() {
+			results <- f.do(t, http.MethodPost, "/v1/users/me/password", changeBody("not my password", newPassword), withToken(l.Token), fromIP(ip)).status
+		})
+	}
+	wg.Wait()
+	close(results)
+	checked := 0
+	for status := range results {
+		switch status {
+		case http.StatusUnprocessableEntity:
+			checked++
+		case http.StatusTooManyRequests:
+		default:
+			t.Errorf("status %d, want 422 or 429", status)
+		}
+	}
+	if checked > limitWrongPassword.Limit {
+		t.Errorf("%d guesses checked, want at most %d", checked, limitWrongPassword.Limit)
+	}
+}
+
+// TestPasswordChangeIsLimitedPerIP checks the password change endpoint has
+// the per-IP limit of the other endpoints that check a password.
+func TestPasswordChangeIsLimitedPerIP(t *testing.T) {
+	t.Parallel()
+	f := setup(t, Hooks{})
+	l := f.signUp(t, testEmail)
+	ip := nextTestIP()
+	for i := range limitLogin.Limit {
+		// Refused before the password is checked, so only the IP limit
+		// counts it.
+		if res := f.do(t, http.MethodPost, "/v1/users/me/password", `{}`, withToken(l.Token), fromIP(ip)); res.status != http.StatusUnprocessableEntity {
+			t.Fatalf("request %d: status %d, body %s", i+1, res.status, res.body)
+		}
+	}
+	wantRateLimited(t, "over the per-IP limit", f.do(t, http.MethodPost, "/v1/users/me/password", `{}`, withToken(l.Token), fromIP(ip)))
 }

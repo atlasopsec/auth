@@ -78,6 +78,13 @@ func (a *Auth) startLink(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteInternalError(w, r, a.log, fmt.Errorf("reading user: %w", err))
 		return
 	}
+	// Until the email is verified, the account may belong to someone else
+	// with this address. A provider linked by a squatter would let them
+	// back in after the owner takes the account back.
+	if row.EmailVerifiedAt == nil {
+		writeEmailNotVerified(w, r)
+		return
+	}
 	challenge, details := a.checkFlowStart(req.startOAuthRequest)
 	hasPassword := row.PasswordHash != nil
 	if hasPassword && req.CurrentPassword == "" {
