@@ -47,6 +47,10 @@ type Hooks struct {
 	// through the pool aren't part of the transaction and wouldn't be
 	// undone. Keep it quick, since the transaction stays open while it
 	// runs. It runs for every new user, including OAuth sign-ups (step 7).
+	//
+	// To refuse a sign-up, for example because the address isn't on an
+	// allowlist, return ErrSignUpNotAllowed (or an error wrapping it). Any
+	// other error is treated as a failure and answered with a 500.
 	OnUserCreated func(ctx context.Context, tx pgx.Tx, u User) error
 
 	// Added in step 8: OnEvent, run after each security event is recorded
@@ -180,6 +184,7 @@ For projects that choose a faster first experience over these protections. Sign-
 |---|---|---|
 | `validation_failed` | 422 | As above |
 | `email_taken` | 409 | An account already uses that email. This reveals that the account exists, which is part of the trade-off |
+| `sign_up_not_allowed` | 403 | `OnUserCreated` returned `ErrSignUpNotAllowed`. Only with `AllowUnverifiedLogin`: in verify first mode a refused sign-up gets the usual `202`, sends no email, and creates nothing, so the response doesn't reveal which addresses are allowed |
 | `bad_request` | 400 | As above |
 
 Unverified accounts can't do anything sensitive in either mode.
@@ -973,7 +978,7 @@ When a provider confirms who the user is:
 3. **An existing account with that email:**
    - **If its email is verified,** the provider is linked to it and the user is logged in. That's the same trust as a password reset link to that inbox.
    - **If its email isn't verified,** this is §2's pre-hijacking case: someone may have signed up with this address first. Its password, sessions, 2FA, and pending email tokens are deleted. Then the email is marked verified, the provider is linked, and the real owner is logged in. A password reset already takes back such an account the same way.
-4. **No account** → a new user with that email, already verified, with no password. `OnUserCreated` runs, as for any sign-up.
+4. **No account** → a new user with that email, already verified, with no password. `OnUserCreated` runs, as for any sign-up. If it returns `ErrSignUpNotAllowed`, nothing is created and the answer is `403 sign_up_not_allowed`. The provider has already shown that the user owns the address, so this reveals nothing to anyone else.
 
 Then, like every other way in:
 - **2FA applies:** a user with 2FA gets a challenge, not a session.
@@ -1026,6 +1031,7 @@ auth.oauth_flows      id, state_hash, provider, purpose (login|link), user_id (l
 |---|---|---|
 | `oauth_failed` | 401 | The flow is unknown, used, or expired; the client verifier doesn't match; or the provider refused the code or token. Already listed in design.md |
 | `oauth_email_not_verified` | 403 | The provider doesn't vouch for the email, and no account is linked yet |
+| `sign_up_not_allowed` | 403 | No account is linked yet, and `OnUserCreated` refused the sign-up with `ErrSignUpNotAllowed` |
 | `oauth_account_in_use` | 409 | Linking a provider account that belongs to another user |
 | `oauth_already_linked` | 409 | Linking a second account with a provider the user already linked (one per provider) |
 | `last_login_method` | 409 | Unlinking the only way left to log in |

@@ -51,6 +51,21 @@ Use a Google OAuth client of type "Web application". For GitHub, register `{AppU
 
 Apple is native Sign in with Apple in the iOS app only, which Apple requires when an iOS app offers Google or GitHub. It needs only the app's bundle ID: the app sends Apple's signed token to `POST /v1/apple-sign-ins`.
 
+## Restricting sign-ups
+
+To let only some people sign up, for example the addresses on an allowlist, return `auth.ErrSignUpNotAllowed` from `Hooks.OnUserCreated`:
+
+```go
+OnUserCreated: func(ctx context.Context, tx pgx.Tx, u auth.User) error {
+	if !invited(ctx, tx, u.Email) {
+		return auth.ErrSignUpNotAllowed
+	}
+	return nil
+},
+```
+
+The sign-up is rolled back and logged at Info. In verify first mode (the default), the response is the same `202` an accepted sign-up gets, and no email is sent, so nobody can use the endpoint to learn which addresses are allowed. With `AllowUnverifiedLogin`, and for sign-ups with a provider, the answer is `403 sign_up_not_allowed`. Any other error from the hook is still a `500`.
+
 ## Users locked out of 2FA
 
 A user who has lost both their authenticator and their recovery codes can't get back in by themselves. After confirming who they are some other way, support turns their 2FA off from admin tooling:

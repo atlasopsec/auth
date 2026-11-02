@@ -467,6 +467,9 @@ func (a *Auth) writeOAuthError(w http.ResponseWriter, r *http.Request, err error
 			slog.String("request_id", httpapi.RequestIDFrom(r.Context())),
 			slog.String("error", err.Error()))
 		httpapi.WriteError(w, r, http.StatusUnauthorized, "oauth_failed", "Signing in didn't work. Try again.", nil)
+	case errors.Is(err, ErrSignUpNotAllowed):
+		a.logSignUpNotAllowed(r)
+		writeSignUpNotAllowed(w, r)
 	case errors.Is(err, errOAuthEmailNotVerified):
 		httpapi.WriteError(w, r, http.StatusForbidden, "oauth_email_not_verified",
 			"Your email address isn't verified with this provider. Verify it there, then try again.", nil)

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -173,6 +174,40 @@ func TestOAuthSignUp(t *testing.T) {
 	}
 	if f.userCount(t) != 1 {
 		t.Errorf("%d users, want 1", f.userCount(t))
+	}
+}
+
+func TestOAuthSignUpNotAllowed(t *testing.T) {
+	t.Parallel()
+	// The hook refuses testEmail, the address ada("g-1") signs in with.
+	f := setupOAuth(t, Config{Hooks: Hooks{OnUserCreated: func(_ context.Context, _ pgx.Tx, u User) error {
+		if u.Email == testEmail {
+			return fmt.Errorf("not on the allowlist: %w", ErrSignUpNotAllowed)
+		}
+		return nil
+	}}})
+	existing := f.verifiedUser(t, "grace@example.com")
+
+	res := f.googleSignIn(t, ada("g-1"))
+	wantError(t, "refused sign-up", res, http.StatusForbidden, "sign_up_not_allowed")
+	if n := f.userCount(t); n != 1 {
+		t.Errorf("%d users, want only the existing one", n)
+	}
+	var accounts int
+	if err := f.pool.QueryRow(context.Background(), `SELECT count(*) FROM auth.oauth_accounts`).Scan(&accounts); err != nil {
+		t.Fatal(err)
+	}
+	if accounts != 0 {
+		t.Errorf("%d OAuth accounts, want 0", accounts)
+	}
+	if logs := f.logs.String(); strings.Contains(logs, "level=ERROR") {
+		t.Errorf("a refused sign-up was logged as an error:\n%s", logs)
+	}
+
+	// The hook runs only for new users: an existing account still signs in.
+	l := loginOf(t, f.googleSignIn(t, oauthtest.GoogleUser{Subject: "g-2", Email: existing.User.Email, EmailVerified: true}))
+	if l.User.ID != existing.User.ID {
+		t.Errorf("signed in as %s, want the existing user %s", l.User.ID, existing.User.ID)
 	}
 }
 

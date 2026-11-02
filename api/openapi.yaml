@@ -16,7 +16,10 @@ paths:
         (verify first) the response is `202` whether or not the email
         already has an account, and the owner of an existing account is
         emailed instead. With `AllowUnverifiedLogin`, the user is logged in
-        immediately (`201`), and an existing email returns `409`.
+        immediately (`201`), and an existing email returns `409`. A sign-up
+        the project refuses (`ErrSignUpNotAllowed` from `OnUserCreated`)
+        gets the same `202` by default, and `403` with
+        `AllowUnverifiedLogin`.
       tags: [users]
       security: []
       requestBody:
@@ -42,6 +45,14 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "409":
           description: "`email_taken`: an account already uses this email (`AllowUnverifiedLogin` only)."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "403":
+          description: >
+            `sign_up_not_allowed`: the project refused the sign-up
+            (`AllowUnverifiedLogin` only; otherwise a refused sign-up gets
+            the usual `202`).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -901,6 +912,8 @@ paths:
           description: >
             `oauth_email_not_verified`: the provider doesn't vouch for the
             email address, and no account is linked yet.
+            `sign_up_not_allowed`: there's no account yet, and the project
+            refused the sign-up.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -958,6 +971,8 @@ paths:
           description: >
             `oauth_email_not_verified`: Apple doesn't vouch for the email
             address, and no account is linked yet.
+            `sign_up_not_allowed`: there's no account yet, and the project
+            refused the sign-up.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
