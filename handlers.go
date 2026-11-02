@@ -127,6 +127,19 @@ func (a *Auth) signUp(w http.ResponseWriter, r *http.Request) {
 		writeVerificationRequired(w, r)
 		return
 	}
+	if errors.Is(err, ErrSignUpNotAllowed) {
+		a.logSignUpNotAllowed(r)
+		if a.allowUnverified {
+			writeSignUpNotAllowed(w, r)
+			return
+		}
+		// Verify first: answer exactly as for an accepted sign-up, so the
+		// response doesn't reveal which addresses are allowed. The
+		// password was already hashed and the user inserted before the
+		// hook refused, so the timing is close to an accepted sign-up's.
+		writeVerificationRequired(w, r)
+		return
+	}
 	if err != nil {
 		httpapi.WriteInternalError(w, r, a.log, err)
 		return
@@ -143,6 +156,18 @@ func (a *Auth) signUp(w http.ResponseWriter, r *http.Request) {
 
 func writeVerificationRequired(w http.ResponseWriter, r *http.Request) {
 	httpapi.WriteJSON(w, r, http.StatusAccepted, map[string]bool{"verification_required": true})
+}
+
+func writeSignUpNotAllowed(w http.ResponseWriter, r *http.Request) {
+	httpapi.WriteError(w, r, http.StatusForbidden, "sign_up_not_allowed", "Sign-ups aren't open to this email address.", nil)
+}
+
+// logSignUpNotAllowed logs a sign-up refused by Hooks.OnUserCreated. It's
+// an expected outcome, so it's Info, and it has no user ID or email: the
+// user was rolled back, and the address is personal data.
+func (a *Auth) logSignUpNotAllowed(r *http.Request) {
+	a.log.InfoContext(r.Context(), "auth: sign-up not allowed",
+		slog.String("request_id", httpapi.RequestIDFrom(r.Context())))
 }
 
 // notifyExistingAccount handles a verify first sign-up with an email that

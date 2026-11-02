@@ -535,6 +535,71 @@ func TestOnUserCreated(t *testing.T) {
 	}
 }
 
+func TestSignUpNotAllowed(t *testing.T) {
+	t.Parallel()
+	const refused = "grace@example.com"
+	// The hook allows only testEmail, as a project's allowlist would.
+	allowlist := Hooks{OnUserCreated: func(_ context.Context, _ pgx.Tx, u User) error {
+		if u.Email != testEmail {
+			return fmt.Errorf("not on the allowlist: %w", ErrSignUpNotAllowed)
+		}
+		return nil
+	}}
+	for _, tt := range []struct {
+		name            string
+		allowUnverified bool
+		// wantSame means a refused sign-up must look exactly like an
+		// accepted one; otherwise it gets wantStatus and wantCode.
+		wantSame   bool
+		wantStatus int
+		wantCode   string
+	}{
+		{name: "verify first", wantSame: true},
+		{name: "unverified login allowed", allowUnverified: true, wantStatus: http.StatusForbidden, wantCode: "sign_up_not_allowed"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			f := setupWith(t, Config{Hooks: allowlist, AllowUnverifiedLogin: tt.allowUnverified})
+
+			allowed := f.do(t, http.MethodPost, "/v1/users", credentials(testEmail, testPassword, "web"))
+			res := f.do(t, http.MethodPost, "/v1/users", credentials(refused, testPassword, "web"))
+
+			if tt.wantSame {
+				if res.status != allowed.status || !bytes.Equal(res.body, allowed.body) {
+					t.Errorf("refused sign-up: status %d, body %s; want the accepted response: %d %s", res.status, res.body, allowed.status, allowed.body)
+				}
+			} else {
+				wantError(t, "refused sign-up", res, tt.wantStatus, tt.wantCode)
+			}
+			if n := f.userCount(t); n != 1 {
+				t.Errorf("%d users, want 1: the refused sign-up created a user", n)
+			}
+			var sessions int
+			if err := f.pool.QueryRow(context.Background(), `SELECT count(*) FROM auth.sessions s JOIN auth.users u ON u.id = s.user_id WHERE u.email = $1`, refused).Scan(&sessions); err != nil {
+				t.Fatal(err)
+			}
+			if sessions != 0 {
+				t.Errorf("the refused sign-up has %d sessions, want 0", sessions)
+			}
+			for _, m := range f.sent() {
+				if m.To == refused {
+					t.Errorf("emailed the refused address: %q", m.Subject)
+				}
+			}
+			logs := f.logs.String()
+			if strings.Contains(logs, "level=ERROR") {
+				t.Errorf("a refused sign-up was logged as an error:\n%s", logs)
+			}
+			if !strings.Contains(logs, `level=INFO msg="auth: sign-up not allowed"`) {
+				t.Errorf("the refused sign-up wasn't logged:\n%s", logs)
+			}
+			if strings.Contains(logs, refused) {
+				t.Errorf("logs contain the refused email address:\n%s", logs)
+			}
+		})
+	}
+}
+
 func TestLogIn(t *testing.T) {
 	t.Parallel()
 	f := setup(t, Hooks{})
