@@ -381,3 +381,47 @@ func TestInvitationsKeepSecretsOutOfLogs(t *testing.T) {
 		}
 	}
 }
+
+// An invitation stops working once its sender couldn't send it any more.
+func TestInvitationFromSomeoneRemovedOrDemoted(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		role   string
+		change string
+		want   int
+	}{
+		{"sender removed", "member", `DELETE FROM auth.memberships WHERE organization_id = $1 AND user_id = $2`, http.StatusUnprocessableEntity},
+		{"sender can no longer manage members", "viewer", `UPDATE auth.memberships SET role = 'member' WHERE organization_id = $1 AND user_id = $2`, http.StatusUnprocessableEntity},
+		{"sender can no longer give the role", "member", `UPDATE auth.memberships SET role = 'manager' WHERE organization_id = $1 AND user_id = $2`, http.StatusUnprocessableEntity},
+		{"sender demoted but still allowed", "manager", `UPDATE auth.memberships SET role = 'manager' WHERE organization_id = $1 AND user_id = $2`, http.StatusOK},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			f := setupOrgs(t, Config{})
+			tm := f.team(t)
+			if res := f.invite(t, tm, "admin", invitee, tt.role); res.status != http.StatusCreated {
+				t.Fatalf("inviting: status %d, body %s", res.status, res.body)
+			}
+			tok := f.invitationToken(t, invitee)
+			if _, err := f.pool.Exec(context.Background(), tt.change, tm.org, tm.users["admin"].User.ID); err != nil {
+				t.Fatal(err)
+			}
+
+			u := f.user(t, invitee)
+			res := f.accept(t, u.Token, tok)
+			if res.status != tt.want {
+				t.Fatalf("accepting: status %d, body %s; want %d", res.status, res.body, tt.want)
+			}
+			if tt.want != http.StatusOK {
+				if res.errorCode(t) != "token_invalid_or_expired" {
+					t.Errorf("error code %q, want token_invalid_or_expired", res.errorCode(t))
+				}
+				if got := f.roleOf(t, tm.org, u.User.ID); got != "" {
+					t.Errorf("joined as %q through the invitation", got)
+				}
+			}
+		})
+	}
+}

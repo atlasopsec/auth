@@ -309,6 +309,9 @@ func (a *Auth) accept(ctx context.Context, tok string, u User) (orgJSON, uuid.UU
 	// After Commit this is a no-op.
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 	q := db.New(tx)
+	if err := a.inviterStillMay(ctx, q, inv); err != nil {
+		return orgJSON{}, uuid.UUID{}, err
+	}
 	n, err := q.AcceptInvitation(ctx, db.AcceptInvitationParams{ID: inv.ID, Now: &now})
 	if err != nil {
 		return orgJSON{}, uuid.UUID{}, fmt.Errorf("accepting invitation: %w", err)
@@ -334,4 +337,28 @@ func (a *Auth) accept(ctx context.Context, tok string, u User) (orgJSON, uuid.UU
 		return orgJSON{}, uuid.UUID{}, fmt.Errorf("committing acceptance: %w", err)
 	}
 	return toOrgJSON(Organization{ID: row.ID, Name: row.Name, CreatedAt: row.CreatedAt.UTC(), UpdatedAt: row.UpdatedAt.UTC()}, row.Role), inv.InvitedBy, nil
+}
+
+// inviterStillMay returns errInvitationInvalid unless whoever sent inv is
+// still a member who could send it now. An invitation from someone since
+// removed or demoted would otherwise still let a person in with a role the
+// organization has taken away from its sender. It holds the organization's
+// lock, so it can't miss a member change made at the same time.
+func (a *Auth) inviterStillMay(ctx context.Context, q *db.Queries, inv db.AuthInvitation) error {
+	if _, err := q.LockOrganization(ctx, inv.OrganizationID); errors.Is(err, pgx.ErrNoRows) {
+		return errInvitationInvalid
+	} else if err != nil {
+		return fmt.Errorf("locking organization: %w", err)
+	}
+	role, err := q.GetMembershipRole(ctx, db.GetMembershipRoleParams{OrganizationID: inv.OrganizationID, UserID: inv.InvitedBy})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return errInvitationInvalid
+	}
+	if err != nil {
+		return fmt.Errorf("reading inviter's role: %w", err)
+	}
+	if !a.orgCan(role, PermMembersManage) || !a.mayAssign(role, inv.Role) {
+		return errInvitationInvalid
+	}
+	return nil
 }

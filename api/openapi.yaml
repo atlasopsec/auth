@@ -677,7 +677,8 @@ paths:
       description: >
         Takes the token from the invitation link (the part after
         `#token=`). The logged-in user's verified email must match the
-        invited address.
+        invited address. The invitation stops working if whoever sent it
+        is no longer a member who could send it.
       tags: [invitations]
       requestBody:
         required: true

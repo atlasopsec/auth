@@ -636,6 +636,7 @@ Members are added by email invitation:
 
 - Inviting someone who's already a member: `409 already_member`.
 - Invitations can be listed and cancelled. Inviting the same address again replaces the earlier invitation.
+- **An invitation only works while its sender could still send it.** If the sender has been removed, or no longer has `members:manage` or every permission in the invited role, accepting it fails like an expired link (`422 token_invalid_or_expired`). Otherwise removing someone wouldn't take back the invitations they'd already sent.
 - The same 60-second cooldown applies per organization and address, until step 8's rate limiting.
 
 ### Endpoints
