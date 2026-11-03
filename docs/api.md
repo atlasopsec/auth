@@ -747,6 +747,7 @@ type Config struct {
 | `POST /v1/users/me/two-factor/recovery-codes` | `{ current_password, code }` | `200 { recovery_codes: [10] }`, replacing the old ones |
 
 - **Setup needs a verified email** (`403 email_not_verified`). Until then the account may have been created by someone else with this address, and 2FA they turned on would stand in the way of the owner's password reset.
+- **Turning 2FA on or off, or replacing the recovery codes, ends every other session,** as a password change does. Users make these changes after a scare, and a session someone else holds shouldn't survive them. A wrong code ends nothing.
 - **Setup needs the current password,** like other account-security changes. Confirming needs a working code from the app, so a bad scan can't lock anyone out (the standard).
 - **`otpauth_uri`** is the standard `otpauth://totp/…` link with the app name as issuer. The client turns it into a QR code; `secret` is for typing in by hand. Both are shown only during setup.
 - **Code settings:** 6 digits, 30-second steps, SHA-1. That's what every authenticator app supports.

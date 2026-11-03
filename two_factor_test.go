@@ -630,3 +630,68 @@ func TestUnverifiedEmailCannotAddWaysIn(t *testing.T) {
 		t.Errorf("%d 2FA secrets (%v), want 0", pending, err)
 	}
 }
+
+// Turning 2FA on or off, or getting new recovery codes, ends every other
+// session, as a password change does.
+func TestTwoFactorChangesEndOtherSessions(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		change func(f fixture, tok string, secret []byte) response
+	}{
+		{"turning 2FA on", nil},
+		{"turning 2FA off", func(f fixture, tok string, secret []byte) response {
+			return f.do(t, http.MethodDelete, "/v1/users/me/two-factor", pwCodeBody(testPassword, f.code(secret)), withToken(tok))
+		}},
+		{"new recovery codes", func(f fixture, tok string, secret []byte) response {
+			return f.do(t, http.MethodPost, "/v1/users/me/two-factor/recovery-codes", pwCodeBody(testPassword, f.code(secret)), withToken(tok))
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			f := setup(t, Hooks{})
+			current := f.signUp(t, testEmail).Token
+			other := f.logIn(t, testEmail).Token
+			secret, _ := f.enableTwoFactor(t, current)
+
+			if tt.change != nil {
+				// A new session, logged in with 2FA, for the change to end.
+				res := f.verify(t, f.startChallenge(t, testEmail), f.code(secret))
+				var l loginJSON
+				if res.status != http.StatusCreated || json.Unmarshal(res.body, &l) != nil {
+					t.Fatalf("logging in with 2FA: status %d, body %s", res.status, res.body)
+				}
+				other = l.Token
+				f.clock.advance(totp.Period)
+
+				if res := tt.change(f, current, secret); res.status/100 != 2 {
+					t.Fatalf("status %d, body %s", res.status, res.body)
+				}
+			}
+
+			if got := f.status(t, current); got != http.StatusOK {
+				t.Errorf("session that made the change: status %d, want 200", got)
+			}
+			if got := f.status(t, other); got != http.StatusUnauthorized {
+				t.Errorf("other session: status %d, want 401", got)
+			}
+		})
+	}
+}
+
+// A rejected change ends no sessions.
+func TestWrongTwoFactorCodeKeepsOtherSessions(t *testing.T) {
+	t.Parallel()
+	f := setup(t, Hooks{})
+	current := f.signUp(t, testEmail).Token
+	other := f.logIn(t, testEmail).Token
+	secret := f.startSetup(t, current)
+
+	if res := f.do(t, http.MethodPost, "/v1/users/me/two-factor/confirm", codeBody(f.wrongCode(secret)), withToken(current)); res.status != http.StatusUnprocessableEntity {
+		t.Fatalf("wrong code: status %d, body %s; want 422", res.status, res.body)
+	}
+	if got := f.status(t, other); got != http.StatusOK {
+		t.Errorf("other session after a wrong code: status %d, want 200", got)
+	}
+}
