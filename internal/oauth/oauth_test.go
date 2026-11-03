@@ -131,6 +131,25 @@ func TestGitHub(t *testing.T) {
 	}
 }
 
+func TestAppleReturnsExpiry(t *testing.T) {
+	t.Parallel()
+	fake := oauthtest.NewApple(t, clock)
+	a := oauth.NewApple([]string{oauthtest.BundleID}, fake.Endpoints(), clock)
+	const nonce = "a-random-nonce-from-the-app"
+	exp := now.Add(7 * time.Minute).Truncate(time.Second)
+
+	_, got, err := a.Verify(context.Background(), fake.IdentityToken(oauthtest.AppleUser{Subject: "a-1", Claims: map[string]any{"exp": exp.Unix()}}, nonce), nonce)
+	if err != nil {
+		t.Fatalf("Verify() error = %v", err)
+	}
+	if !got.Equal(exp) {
+		t.Errorf("expiry = %v, want %v", got, exp)
+	}
+	if _, got, err := a.Verify(context.Background(), fake.IdentityToken(oauthtest.AppleUser{Subject: "a-1"}, nonce), "another-nonce"); err == nil || !got.IsZero() {
+		t.Errorf("wrong nonce: expiry %v, error %v; want zero and an error", got, err)
+	}
+}
+
 func TestApple(t *testing.T) {
 	t.Parallel()
 	fake := oauthtest.NewApple(t, clock)
@@ -166,7 +185,7 @@ func TestApple(t *testing.T) {
 		{"odd email_verified", oauthtest.AppleUser{Subject: "a-1", Claims: map[string]any{"email_verified": "yes"}}, nonce, oauth.Identity{}, true},
 	}
 	for _, tt := range tests {
-		got, err := a.Verify(ctx, fake.IdentityToken(tt.user, nonce), tt.nonce)
+		got, _, err := a.Verify(ctx, fake.IdentityToken(tt.user, nonce), tt.nonce)
 		if (err != nil) != tt.wantErr {
 			t.Errorf("%s: error = %v, want error %v", tt.name, err, tt.wantErr)
 			continue

@@ -41,7 +41,8 @@ func (a *Auth) checkBreached(r *http.Request, field, pw string) (httpapi.FieldEr
 }
 
 // requestPasswordReset emails a reset link. It always answers 202, whether
-// or not the email has an account, so it can't be used to find accounts.
+// or not the email has an account, and finds the account after answering,
+// so neither the response nor its timing can be used to find accounts.
 func (a *Auth) requestPasswordReset(w http.ResponseWriter, r *http.Request) {
 	var req emailRequest
 	if err := httpapi.Decode(w, r, &req); err != nil {
@@ -57,24 +58,12 @@ func (a *Auth) requestPasswordReset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	row, err := a.q.GetUserByEmail(r.Context(), req.Email)
-	switch {
-	case errors.Is(err, pgx.ErrNoRows):
-	case err != nil:
-		httpapi.WriteInternalError(w, r, a.log, err)
-		return
-	default:
+	email := req.Email
+	a.afterResponse(r, func(ctx context.Context) error {
 		// Accounts without a password (OAuth only) can use a reset to add
 		// one.
-		tok, t, err := a.tokens.Create(r.Context(), row.ID, emailtoken.ResetPassword, "")
-		if err != nil && !errors.Is(err, emailtoken.ErrCooldown) {
-			httpapi.WriteInternalError(w, r, a.log, err)
-			return
-		}
-		if err == nil {
-			a.sendEmail(row.Email, a.emails.PasswordReset, emailtoken.ResetPassword, tok, t.ID)
-		}
-	}
+		return a.emailLinkIfAccount(ctx, email, emailtoken.ResetPassword, a.emails.PasswordReset, nil)
+	})
 	w.WriteHeader(http.StatusAccepted)
 }
 

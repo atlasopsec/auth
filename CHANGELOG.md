@@ -4,6 +4,14 @@ What changed in each release of `github.com/atlasopsec/auth`. The Next.js templa
 
 The exported Go API and the HTTP endpoints follow [semantic versioning](https://semver.org): a minor release only adds, and anything removed or changed waits for the next major version.
 
+## Unreleased
+
+### Security
+
+- An Apple identity token now signs in only once. `POST /v1/apple-sign-ins` records each token's nonce (as a SHA-256 hash) until the token expires, and refuses a token whose nonce was already used with `401 oauth_failed`. Before, a captured token and nonce could sign in again until the token expired. Apps must make a new nonce for every sign-in. Adds the `auth.used_apple_nonces` table; run `Migrate`.
+- `POST /v1/password-resets` and `POST /v1/email-verifications` now look up the account and create its link after responding, so the response time no longer shows whether the address has an account. A database error there is now logged instead of answered with `500`.
+- In verify first mode (the default), `POST /v1/users` now answers `202` right after hashing the password, and creates the user (or emails the existing account's owner) afterwards, so the response time no longer shows whether the address has an account. This changes when `Hooks.OnUserCreated` runs: just after the response rather than before it, with the request's context values. A hook error other than `ErrSignUpNotAllowed`, or a database error, is now logged as an error instead of answered with `500`. A project test that signs up and immediately reads the new user may need to wait for it. With `AllowUnverifiedLogin` nothing changes.
+
 ## v1.3.0
 
 If you use the Next.js template, see its 0.4.0 changes for an option that requires an https mobile deep link.

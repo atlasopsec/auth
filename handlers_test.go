@@ -166,6 +166,7 @@ const testEncryptionKey = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE="
 // sent waits for emails being sent in the background, then returns every
 // email sent so far.
 func (f fixture) sent() []mail.Message {
+	f.auth.jobs.Wait()
 	f.auth.sender.Wait()
 	return f.mail.Messages()
 }
@@ -229,6 +230,9 @@ func (f fixture) do(t *testing.T, method, path, body string, opts ...reqOpt) res
 	}
 	w := httptest.NewRecorder()
 	f.mux.ServeHTTP(w, r)
+	// Finish the work the request left for after its response, so tests
+	// see its effects, as they would once that work is done in a server.
+	f.auth.jobs.Wait()
 	return response{status: w.Code, header: w.Header(), body: w.Body.Bytes()}
 }
 

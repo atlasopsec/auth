@@ -285,13 +285,15 @@ func NewApple(bundleIDs []string, e AppleEndpoints, now func() time.Time) *Apple
 }
 
 // Verify checks an identity token from the native sheet and returns the
-// identity in it. The app gives Apple the hex SHA-256 of a random nonce,
-// and sends the nonce itself here, so a token on its own can't be replayed
-// by someone who doesn't have the nonce.
-func (a *Apple) Verify(ctx context.Context, rawToken, nonce string) (Identity, error) {
+// identity in it, and when the token expires. The app gives Apple the hex
+// SHA-256 of a random nonce, and sends the nonce itself here, so a token on
+// its own can't be replayed by someone who doesn't have the nonce. Verify
+// doesn't remember tokens: to refuse a token and nonce sent twice, the
+// caller records the nonce as used until the token expires.
+func (a *Apple) Verify(ctx context.Context, rawToken, nonce string) (Identity, time.Time, error) {
 	idTok, err := a.verifier.Verify(ctx, rawToken)
 	if err != nil {
-		return Identity{}, fmt.Errorf("oauth: apple: verifying identity token: %w", err)
+		return Identity{}, time.Time{}, fmt.Errorf("oauth: apple: verifying identity token: %w", err)
 	}
 	audOK := false
 	for _, aud := range idTok.Audience {
@@ -300,23 +302,23 @@ func (a *Apple) Verify(ctx context.Context, rawToken, nonce string) (Identity, e
 		}
 	}
 	if !audOK {
-		return Identity{}, fmt.Errorf("oauth: apple: token audience %v isn't a configured bundle ID", idTok.Audience)
+		return Identity{}, time.Time{}, fmt.Errorf("oauth: apple: token audience %v isn't a configured bundle ID", idTok.Audience)
 	}
 	sum := sha256.Sum256([]byte(nonce))
 	if nonce == "" || subtle.ConstantTimeCompare([]byte(idTok.Nonce), []byte(hex.EncodeToString(sum[:]))) != 1 {
-		return Identity{}, errors.New("oauth: apple: token nonce doesn't match")
+		return Identity{}, time.Time{}, errors.New("oauth: apple: token nonce doesn't match")
 	}
 	var claims struct {
 		Email         string   `json:"email"`
 		EmailVerified flexBool `json:"email_verified"`
 	}
 	if err := idTok.Claims(&claims); err != nil {
-		return Identity{}, fmt.Errorf("oauth: apple: reading claims: %w", err)
+		return Identity{}, time.Time{}, fmt.Errorf("oauth: apple: reading claims: %w", err)
 	}
 	if idTok.Subject == "" {
-		return Identity{}, errors.New("oauth: apple: token has no subject")
+		return Identity{}, time.Time{}, errors.New("oauth: apple: token has no subject")
 	}
-	return Identity{Subject: idTok.Subject, Email: claims.Email, EmailVerified: bool(claims.EmailVerified)}, nil
+	return Identity{Subject: idTok.Subject, Email: claims.Email, EmailVerified: bool(claims.EmailVerified)}, idTok.Expiry, nil
 }
 
 // flexBool reads a JSON boolean that Apple sends either as true or as the

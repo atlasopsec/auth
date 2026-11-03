@@ -124,32 +124,28 @@ func (a *Auth) signUp(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteInternalError(w, r, a.log, err)
 		return
 	}
-	created, err := a.createUser(r, req.Email, hash, session.Client(req.Client))
-	if errors.Is(err, errEmailTaken) {
-		if a.allowUnverified {
-			httpapi.WriteError(w, r, http.StatusConflict, "email_taken", "An account with this email already exists.", nil)
-			return
-		}
-		// Verify first: answer exactly as for a new account, and tell the
-		// address's owner by email instead.
-		if err := a.notifyExistingAccount(r, req.Email); err != nil {
-			httpapi.WriteInternalError(w, r, a.log, err)
-			return
-		}
+	if !a.allowUnverified {
+		// Verify first: the answer is the same 202 whatever the address,
+		// so everything that depends on it, starting with whether it has
+		// an account, happens after answering. Both cases then take the
+		// same time (standards/auth.md §9).
+		email := req.Email
+		a.afterResponse(r, func(ctx context.Context) error {
+			return a.finishSignUp(ctx, email, hash)
+		})
 		writeVerificationRequired(w, r)
 		return
 	}
+
+	ip, ua := httpapi.Client(r, a.trusted)
+	created, err := a.createUser(r.Context(), req.Email, hash, session.Meta{Client: session.Client(req.Client), IP: ip, UserAgent: ua})
+	if errors.Is(err, errEmailTaken) {
+		httpapi.WriteError(w, r, http.StatusConflict, "email_taken", "An account with this email already exists.", nil)
+		return
+	}
 	if errors.Is(err, ErrSignUpNotAllowed) {
-		a.logSignUpNotAllowed(r)
-		if a.allowUnverified {
-			writeSignUpNotAllowed(w, r)
-			return
-		}
-		// Verify first: answer exactly as for an accepted sign-up, so the
-		// response doesn't reveal which addresses are allowed. The
-		// password was already hashed and the user inserted before the
-		// hook refused, so the timing is close to an accepted sign-up's.
-		writeVerificationRequired(w, r)
+		a.logSignUpNotAllowed(r.Context())
+		writeSignUpNotAllowed(w, r)
 		return
 	}
 	if err != nil {
@@ -158,12 +154,27 @@ func (a *Auth) signUp(w http.ResponseWriter, r *http.Request) {
 	}
 	a.logEvent(r, "auth: user signed up", created.user.ID)
 	a.sendEmail(created.user.Email, a.emails.VerifyEmail, emailtoken.VerifyEmail, created.verifyToken, created.verifyTokenID)
-
-	if !a.allowUnverified {
-		writeVerificationRequired(w, r)
-		return
-	}
 	httpapi.WriteJSON(w, r, http.StatusCreated, newLoginResponse(toUserJSON(created.user), created.sessionToken, created.session))
+}
+
+// finishSignUp does a verify first sign-up after the response: it creates
+// the user and emails them a verification link, or, if the address has an
+// account, tells its owner instead. A sign-up refused by OnUserCreated is
+// logged at Info and sends nothing.
+func (a *Auth) finishSignUp(ctx context.Context, email, hash string) error {
+	created, err := a.createUser(ctx, email, hash, session.Meta{})
+	switch {
+	case errors.Is(err, errEmailTaken):
+		return a.notifyExistingAccount(ctx, email)
+	case errors.Is(err, ErrSignUpNotAllowed):
+		a.logSignUpNotAllowed(ctx)
+		return nil
+	case err != nil:
+		return err
+	}
+	a.logUserEvent(ctx, "auth: user signed up", created.user.ID)
+	a.sendEmail(created.user.Email, a.emails.VerifyEmail, emailtoken.VerifyEmail, created.verifyToken, created.verifyTokenID)
+	return nil
 }
 
 func writeVerificationRequired(w http.ResponseWriter, r *http.Request) {
@@ -177,9 +188,9 @@ func writeSignUpNotAllowed(w http.ResponseWriter, r *http.Request) {
 // logSignUpNotAllowed logs a sign-up refused by Hooks.OnUserCreated. It's
 // an expected outcome, so it's Info, and it has no user ID or email: the
 // user was rolled back, and the address is personal data.
-func (a *Auth) logSignUpNotAllowed(r *http.Request) {
-	a.log.InfoContext(r.Context(), "auth: sign-up not allowed",
-		slog.String("request_id", httpapi.RequestIDFrom(r.Context())))
+func (a *Auth) logSignUpNotAllowed(ctx context.Context) {
+	a.log.InfoContext(ctx, "auth: sign-up not allowed",
+		slog.String("request_id", httpapi.RequestIDFrom(ctx)))
 }
 
 // notifyExistingAccount handles a verify first sign-up with an email that
@@ -188,8 +199,8 @@ func (a *Auth) logSignUpNotAllowed(r *http.Request) {
 // link if they never verified, or otherwise a notice with a password reset
 // link. Within the cooldown nothing is sent, which the response doesn't
 // reveal.
-func (a *Auth) notifyExistingAccount(r *http.Request, email string) error {
-	row, err := a.q.GetUserByEmail(r.Context(), email)
+func (a *Auth) notifyExistingAccount(ctx context.Context, email string) error {
+	row, err := a.q.GetUserByEmail(ctx, email)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// Deleted since the sign-up failed; nothing to tell anyone.
 		return nil
@@ -202,7 +213,7 @@ func (a *Auth) notifyExistingAccount(r *http.Request, email string) error {
 	if row.EmailVerifiedAt == nil {
 		kind, tmpl = emailtoken.VerifyEmail, a.emails.VerifyEmail
 	}
-	tok, t, err := a.tokens.Create(r.Context(), row.ID, kind, "")
+	tok, t, err := a.tokens.Create(ctx, row.ID, kind, "")
 	if errors.Is(err, emailtoken.ErrCooldown) {
 		return nil
 	}
@@ -225,10 +236,9 @@ type createdUser struct {
 }
 
 // createUser creates the user, runs OnUserCreated, creates their email
-// verification token and, with AllowUnverifiedLogin, their first session,
-// all in one transaction.
-func (a *Auth) createUser(r *http.Request, email, hash string, client session.Client) (createdUser, error) {
-	ctx := r.Context()
+// verification token and, with AllowUnverifiedLogin, their first session
+// with meta, all in one transaction.
+func (a *Auth) createUser(ctx context.Context, email, hash string, meta session.Meta) (createdUser, error) {
 	id, err := uuid.NewV7()
 	if err != nil {
 		return createdUser{}, fmt.Errorf("generating user ID: %w", err)
@@ -268,8 +278,7 @@ func (a *Auth) createUser(r *http.Request, email, hash string, client session.Cl
 	c.verifyToken, c.verifyTokenID = tok, t.ID
 
 	if a.allowUnverified {
-		ip, ua := httpapi.Client(r, a.trusted)
-		c.sessionToken, c.session, err = session.NewManager(tx, a.now).Create(ctx, c.user.ID, session.Meta{Client: client, IP: ip, UserAgent: ua}, session.Standard)
+		c.sessionToken, c.session, err = session.NewManager(tx, a.now).Create(ctx, c.user.ID, meta, session.Standard)
 		if err != nil {
 			return createdUser{}, err
 		}
@@ -520,8 +529,14 @@ func (a *Auth) logOutEverywhere(w http.ResponseWriter, r *http.Request) {
 // logEvent logs an auth event with only IDs: never emails, passwords, or
 // tokens.
 func (a *Auth) logEvent(r *http.Request, msg string, userID uuid.UUID) {
-	a.log.InfoContext(r.Context(), msg,
-		slog.String("request_id", httpapi.RequestIDFrom(r.Context())),
+	a.logUserEvent(r.Context(), msg, userID)
+}
+
+// logUserEvent is logEvent for work done after the response, with the
+// request's context.
+func (a *Auth) logUserEvent(ctx context.Context, msg string, userID uuid.UUID) {
+	a.log.InfoContext(ctx, msg,
+		slog.String("request_id", httpapi.RequestIDFrom(ctx)),
 		slog.String("user_id", userID.String()))
 }
 

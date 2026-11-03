@@ -46,3 +46,19 @@ SELECT count(*) FROM auth.oauth_accounts WHERE user_id = @user_id;
 
 -- name: DeleteUserOAuthAccounts :exec
 DELETE FROM auth.oauth_accounts WHERE user_id = @user_id;
+
+-- Records that an Apple identity token with this nonce signed someone in.
+-- It affects no rows if a token that hasn't expired already used the
+-- nonce: that's a replay. An expired one's row is reused, since its token
+-- is refused anyway. The row has to have expired before @now, which is
+-- taken before the token's expiry was checked, so the same token can't
+-- slip through at the moment it expires.
+-- name: UseAppleNonce :execrows
+INSERT INTO auth.used_apple_nonces AS u (id, nonce_hash, expires_at, created_at, updated_at)
+VALUES (@id, @nonce_hash, @expires_at, @now, @now)
+ON CONFLICT (nonce_hash) DO UPDATE
+    SET id = EXCLUDED.id, expires_at = EXCLUDED.expires_at, updated_at = EXCLUDED.updated_at
+    WHERE u.expires_at < @now;
+
+-- name: DeleteExpiredAppleNonces :execrows
+DELETE FROM auth.used_apple_nonces WHERE expires_at < @now;

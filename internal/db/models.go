@@ -162,6 +162,14 @@ type AuthTwoFactorFailure struct {
 	UpdatedAt time.Time
 }
 
+type AuthUsedAppleNonce struct {
+	ID        uuid.UUID
+	NonceHash []byte
+	ExpiresAt time.Time
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
 type AuthUser struct {
 	ID                uuid.UUID
 	Email             string

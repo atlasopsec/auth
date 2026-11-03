@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"regexp"
 	"strings"
 	"testing"
@@ -523,5 +524,112 @@ func TestEveryEmailCanBeCustomized(t *testing.T) {
 		if subject, _, _ := tmpl(EmailData{}); subject != name {
 			t.Errorf("%s uses the default template, want the custom one", name)
 		}
+	}
+}
+
+// TestVerifyFirstSignUpDoesntWaitForTheAccount checks that a verify first
+// sign-up answers without touching the users table, so it takes the same
+// time whether or not the address has an account (standards/auth.md §9).
+// The test locks the table against writes: before the fix, a sign-up
+// created the user, or emailed the existing account's owner, while
+// answering, so it waited for the lock until its deadline and failed.
+func TestVerifyFirstSignUpDoesntWaitForTheAccount(t *testing.T) {
+	t.Parallel()
+	const existing = "existing@example.com"
+	for _, tt := range []struct {
+		name, email, subject string
+		// verified marks the existing account verified first.
+		verified bool
+	}{
+		{"new address", testEmail, "Verify your email for Example", false},
+		{"unverified account", existing, "Verify your email for Example", false},
+		{"verified account", existing, "Sign-up attempt for Example", true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			f := verifyFirst(t)
+			if res := f.do(t, http.MethodPost, "/v1/users", credentials(existing, testPassword, "web")); res.status != http.StatusAccepted {
+				t.Fatalf("first sign-up: status %d, body %s", res.status, res.body)
+			}
+			if tt.verified {
+				if _, err := f.pool.Exec(context.Background(), `UPDATE auth.users SET email_verified_at = now() WHERE email = $1`, existing); err != nil {
+					t.Fatal(err)
+				}
+			}
+			f.clock.advance(emailtoken.Cooldown)
+			users, before := f.userCount(t), len(f.emailsTo(tt.email))
+
+			ctx := context.Background()
+			tx, err := f.pool.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = tx.Rollback(ctx) }()
+			// Reads still work; inserts and row locks wait.
+			if _, err := tx.Exec(ctx, `LOCK TABLE auth.users IN EXCLUSIVE MODE`); err != nil {
+				t.Fatal(err)
+			}
+
+			// A deadline, so the old behavior fails instead of hanging.
+			reqCtx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			r := httptest.NewRequestWithContext(reqCtx, http.MethodPost, "/v1/users", strings.NewReader(credentials(tt.email, "another passphrase 42", "web")))
+			r.RemoteAddr = "203.0.113.50:5000"
+			w := httptest.NewRecorder()
+			// Not f.do: it waits for the background work, which is waiting
+			// for the lock this test holds.
+			f.mux.ServeHTTP(w, r)
+			if want := `{"verification_required":true}` + "\n"; w.Code != http.StatusAccepted || w.Body.String() != want {
+				t.Errorf("with the users table locked: status %d, body %q; want 202 %q, without waiting", w.Code, w.Body, want)
+			}
+
+			// Once the table is free, the sign-up finishes.
+			if err := tx.Rollback(ctx); err != nil {
+				t.Fatal(err)
+			}
+			emails := f.emailsTo(tt.email)
+			if len(emails) != before+1 {
+				t.Fatalf("%d emails after the sign-up, want %d", len(emails), before+1)
+			}
+			if got := emails[len(emails)-1].Subject; got != tt.subject {
+				t.Errorf("subject = %q, want %q", got, tt.subject)
+			}
+			wantUsers := users + 1
+			if tt.email == existing {
+				wantUsers = users
+			}
+			if n := f.userCount(t); n != wantUsers {
+				t.Errorf("%d users, want %d", n, wantUsers)
+			}
+		})
+	}
+}
+
+// TestVerifyFirstSignUpHookFailure checks a verify first sign-up whose
+// OnUserCreated hook fails: the answer is the usual 202, since it was sent
+// before the hook ran, and the failure is logged as an error with nothing
+// created or sent.
+func TestVerifyFirstSignUpHookFailure(t *testing.T) {
+	t.Parallel()
+	f := setupWith(t, Config{Hooks: Hooks{OnUserCreated: func(context.Context, pgx.Tx, User) error {
+		return errors.New("profile service unavailable")
+	}}})
+
+	res := f.do(t, http.MethodPost, "/v1/users", credentials(testEmail, testPassword, "web"))
+	if res.status != http.StatusAccepted || string(res.body) != `{"verification_required":true}`+"\n" {
+		t.Errorf("status %d, body %s; want the usual 202", res.status, res.body)
+	}
+	if n := f.userCount(t); n != 0 {
+		t.Errorf("%d users after a failed hook, want 0", n)
+	}
+	if n := len(f.sent()); n != 0 {
+		t.Errorf("%d emails after a failed hook, want 0", n)
+	}
+	logs := f.logs.String()
+	if !strings.Contains(logs, `level=ERROR msg="auth: background work failed"`) || !strings.Contains(logs, "profile service unavailable") {
+		t.Errorf("the hook's failure wasn't logged as an error:\n%s", logs)
+	}
+	if strings.Contains(logs, testEmail) {
+		t.Errorf("the address was logged:\n%s", logs)
 	}
 }

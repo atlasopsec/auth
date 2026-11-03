@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -500,5 +501,66 @@ func TestPasswordResetOfVerifiedAccountKeepsProviders(t *testing.T) {
 	var linked int
 	if err := f.pool.QueryRow(context.Background(), `SELECT count(*) FROM auth.oauth_accounts WHERE user_id = $1`, l.User.ID).Scan(&linked); err != nil || linked != 1 {
 		t.Errorf("%d linked providers (%v), want 1", linked, err)
+	}
+}
+
+// TestEmailLinkRequestsDontWaitForTheAccount checks that asking for a
+// reset or verification link answers without touching the account, so the
+// response takes the same time whether or not the address has one
+// (standards/auth.md §9). The test holds the account's row lock: before the
+// fix, the request made the link while answering, so it waited for the
+// lock until its deadline and failed.
+func TestEmailLinkRequestsDontWaitForTheAccount(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		name, path, subject string
+	}{
+		{"password reset", "/v1/password-resets", "Reset your password for Example"},
+		{"verification", "/v1/email-verifications", "Verify your email for Example"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			f := verifyFirst(t)
+			if res := f.do(t, http.MethodPost, "/v1/users", credentials(testEmail, testPassword, "web")); res.status != http.StatusAccepted {
+				t.Fatalf("sign up: status %d, body %s", res.status, res.body)
+			}
+			f.clock.advance(emailtoken.Cooldown)
+			before := len(f.emailsTo(testEmail))
+
+			ctx := context.Background()
+			tx, err := f.pool.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = tx.Rollback(ctx) }()
+			if _, err := tx.Exec(ctx, `SELECT 1 FROM auth.users WHERE email = $1 FOR UPDATE`, testEmail); err != nil {
+				t.Fatal(err)
+			}
+
+			// A deadline, so the old behavior fails instead of hanging.
+			reqCtx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			r := httptest.NewRequestWithContext(reqCtx, http.MethodPost, tt.path, strings.NewReader(`{"email":"`+testEmail+`"}`))
+			r.RemoteAddr = "203.0.113.50:5000"
+			w := httptest.NewRecorder()
+			// Not f.do: it waits for the background work, which is waiting
+			// for the lock this test holds.
+			f.mux.ServeHTTP(w, r)
+			if w.Code != http.StatusAccepted || w.Body.Len() != 0 {
+				t.Errorf("with the account locked: status %d, body %q; want 202 with no body, without waiting", w.Code, w.Body)
+			}
+
+			// Once the account is free, the link is sent.
+			if err := tx.Rollback(ctx); err != nil {
+				t.Fatal(err)
+			}
+			emails := f.emailsTo(testEmail)
+			if len(emails) != before+1 {
+				t.Fatalf("%d emails after the request, want %d", len(emails), before+1)
+			}
+			if got := emails[len(emails)-1].Subject; got != tt.subject {
+				t.Errorf("subject = %q, want %q", got, tt.subject)
+			}
+		})
 	}
 }

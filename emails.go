@@ -1,14 +1,21 @@
 package auth
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"log/slog"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
+	"github.com/atlasopsec/auth/internal/db"
 	"github.com/atlasopsec/auth/internal/emailtoken"
+	"github.com/atlasopsec/auth/internal/httpapi"
 	"github.com/atlasopsec/auth/mail"
 )
 
@@ -287,6 +294,57 @@ func (a *Auth) sendEmail(to string, tmpl func(EmailData) (string, string, string
 		Link:      a.link(kind, tok),
 		ExpiresIn: kind.Lifetime(),
 	}, tokenID)
+}
+
+// backgroundTimeout limits the work afterResponse runs.
+const backgroundTimeout = 30 * time.Second
+
+// afterResponse runs fn in the background, with r's values (for the
+// request ID in logs) but not its cancellation, and logs its error.
+// Endpoints that mustn't reveal whether an account exists use it for
+// everything that depends on the account, starting with looking it up, so
+// they respond in the same time either way (standards/auth.md §9).
+func (a *Auth) afterResponse(r *http.Request, fn func(ctx context.Context) error) {
+	ctx := context.WithoutCancel(r.Context())
+	started := a.jobs.Go(func() {
+		ctx, cancel := context.WithTimeout(ctx, backgroundTimeout)
+		defer cancel()
+		if err := fn(ctx); err != nil {
+			a.log.ErrorContext(ctx, "auth: background work failed",
+				slog.String("request_id", httpapi.RequestIDFrom(ctx)),
+				slog.String("error", err.Error()))
+		}
+	})
+	if !started {
+		a.log.ErrorContext(ctx, "auth: background work dropped because auth is closed",
+			slog.String("request_id", httpapi.RequestIDFrom(ctx)))
+	}
+}
+
+// emailLinkIfAccount emails a new link of kind to the account with email,
+// if there is one and want (when not nil) accepts it. Within the cooldown
+// nothing is sent. It runs after the response (see afterResponse), so none
+// of this shows in the response or its timing.
+func (a *Auth) emailLinkIfAccount(ctx context.Context, email string, kind emailtoken.Kind, tmpl func(EmailData) (string, string, string), want func(db.AuthUser) bool) error {
+	row, err := a.q.GetUserByEmail(ctx, email)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("looking up account for %s link: %w", kind, err)
+	}
+	if want != nil && !want(row) {
+		return nil
+	}
+	tok, t, err := a.tokens.Create(ctx, row.ID, kind, "")
+	if errors.Is(err, emailtoken.ErrCooldown) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	a.sendEmail(row.Email, tmpl, kind, tok, t.ID)
+	return nil
 }
 
 // sendNotice sends an email without a link, such as a security notice.

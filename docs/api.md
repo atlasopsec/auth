@@ -158,6 +158,7 @@ Sign-up creates the account and emails a verification link. It doesn't log the u
 ```
 
 - **The response is identical whether or not the email is already in use**, in body, status, and timing. If it's in use, nothing is created and the owner of that address gets an email instead ("someone tried to sign up with your email; log in or reset your password"). So sign-up never reveals whether an account exists.
+- **Everything after the password hash happens after the response:** creating the user, `OnUserCreated`, and the email, or the notice to the existing owner. Those take different database work for new and existing addresses, so doing them first would show in the timing. A failure there (a database error, or a hook error other than `ErrSignUpNotAllowed`) is logged as an error; the `202` has already been sent. This is verify first mode only: with `AllowUnverifiedLogin` the response already differs (`201` or `409`).
 - Nobody can claim an account for an email they don't control.
 - Logging in to an unverified account with the correct password returns `403 email_not_verified`, so the client can offer to resend the link. A wrong password still returns `invalid_credentials`, so this reveals nothing to someone who doesn't know the password.
 
@@ -277,7 +278,7 @@ Confirmed in review on 2026-10-28:
 
 1. **`Register(mux)`** adds routes to the project's `ServeMux`, rather than a single mounted `Handler()`.
 2. **`Authenticated(h)` now, `Require(permission, h)` with RBAC**, plus `Public(h)`.
-3. **`OnUserCreated` runs inside the sign-up transaction**, so a hook failure cancels the sign-up. Hooks write through `tx` and stay quick.
+3. **`OnUserCreated` runs inside the sign-up transaction**, so a hook failure cancels the sign-up. Hooks write through `tx` and stay quick. (In verify first mode this now happens just after the response; see §2.)
 4. **Verify first is the default; immediate login is opt-in** with `AllowUnverifiedLogin`. Step 3 ships immediate login until step 4 adds verification.
 5. **`client` is a required body field** on sign-up and login.
 6. **Unknown JSON fields are rejected.** Deploy the API before app versions that send new fields.
@@ -351,6 +352,7 @@ type Message struct {
 Endpoints that send email respond first and send afterwards, in a background goroutine with up to 3 retries.
 
 - **No timing leak:** "send a reset link" takes the same time whether or not the account exists. Sending synchronously would make real accounts noticeably slower (Resend takes 200–500 ms).
+- **The link is made in the background too:** `POST /v1/password-resets` and `POST /v1/email-verifications` look the account up and create its token after responding, since those are extra database round trips an unknown address doesn't make. A database error there is logged instead of returning `500`. `Close` waits for this work before closing the sender.
 - **Why not an outbox table** (store emails in Postgres, send from a worker): the emails contain live tokens, so the table would hold working reset links in plain text, which is exactly what hashing tokens avoids.
 - **Trade-off:** an email in flight when the server stops is lost, and the user clicks "resend". `Close` keeps that window small on a normal deploy.
 
@@ -967,6 +969,7 @@ POST /v1/apple-sign-ins
 
 - **The token is checked against Apple's published keys:** issuer, audience (one of `BundleIDs`), expiry, and the nonce.
 - **The nonce:** the app generates a random nonce, gives Apple its hex SHA-256, and sends the nonce itself here. The token carries only the hash, so someone holding just the token can't use it.
+- **Each nonce signs in once:** its SHA-256 is recorded in `auth.used_apple_nonces` until the token expires, and a token whose nonce is already recorded is refused with `401 oauth_failed`. So a token and nonce captured from a request (from a log, say) can't be sent again. The nonce is spent before the sign-in, so two requests with it can't both get in; if the sign-in then fails, the app shows the Apple sheet again for a new token. The app must make a new nonce for every sign-in. Tokens that fail a check don't spend their nonce.
 - **The session is always a `mobile` one,** so the body has no `client`.
 - **Apple is iOS only: no web or Android sign-in** (confirmed in review on 2026-10-29). Apple's sign-in API doesn't document PKCE, which the auth standard requires, and Apple only requires its sign-in on iOS. Someone who signed up with Apple on an iPhone uses a password on the web: a password reset sends them a link, through Apple's relay if they hid their address.
 - **Linking Apple from settings isn't offered.** A first Apple sign-in links by verified email like any provider; with Hide My Email the address won't match, so it makes a new account. Unlinking Apple works as for any provider.
@@ -1026,6 +1029,13 @@ auth.oauth_accounts   id, user_id, provider, provider_user_id, email,
 auth.oauth_flows      id, state_hash, provider, purpose (login|link), user_id (link only),
                       client, client_challenge, pkce_verifier_encrypted, nonce,
                       expires_at, used_at, created_at, updated_at
+```
+
+Migration `00011`:
+
+```
+auth.used_apple_nonces  id, nonce_hash, expires_at, created_at, updated_at
+                        unique (nonce_hash)
 ```
 
 - **`email` on `oauth_accounts`** is the provider's address when linked, shown in settings ("Google: ada@gmail.com"). It's never used for matching.

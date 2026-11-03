@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/atlasopsec/auth/internal/background"
 	"github.com/atlasopsec/auth/internal/db"
 	"github.com/atlasopsec/auth/internal/emailtoken"
 	"github.com/atlasopsec/auth/internal/oauth"
@@ -143,7 +144,14 @@ type Hooks struct {
 	//
 	// To refuse a sign-up, for example because the address isn't on an
 	// allowlist, return ErrSignUpNotAllowed (or an error wrapping it). Any
-	// other error is treated as a failure and answered with a 500.
+	// other error is treated as a failure: logged as an error and, with
+	// AllowUnverifiedLogin or a provider, answered with a 500.
+	//
+	// In verify first mode (the default), an email and password sign-up
+	// answers before creating the user, so the response takes the same
+	// time whether or not the address has an account. The hook then runs
+	// just after the response, with the request's context values but not
+	// its cancellation, and a failure can't change the 202 already sent.
 	OnUserCreated func(ctx context.Context, tx pgx.Tx, u User) error
 
 	// OnEvent runs after each security event is recorded, for projects
@@ -161,6 +169,7 @@ type Auth struct {
 	sessions        *session.Manager
 	tokens          *emailtoken.Manager
 	sender          *sender.Sender
+	jobs            *background.Group // work after a response, see afterResponse
 	trusted         []netip.Prefix
 	hooks           Hooks
 	log             *slog.Logger
@@ -320,6 +329,7 @@ func New(cfg Config) (*Auth, error) {
 	a.sessions = session.NewManager(cfg.DB, a.now)
 	a.tokens = emailtoken.NewManager(cfg.DB, a.now)
 	a.sender = sender.New(cfg.Mailer, a.log)
+	a.jobs = background.New(a.log)
 	if !cfg.DisableCleanup {
 		a.startCleanup(cleanupFirst, cleanupEvery)
 	}
@@ -330,13 +340,15 @@ func New(cfg Config) (*Auth, error) {
 }
 
 // Close stops the cleanup job and waits for emails that are still being
-// sent, until ctx is done. Call it when the server shuts down, after it
-// stops accepting requests.
+// prepared or sent, until ctx is done. Call it when the server shuts down,
+// after it stops accepting requests.
 func (a *Auth) Close(ctx context.Context) error {
 	if a.stopCleanup != nil {
 		a.stopCleanup()
 	}
-	if err := a.sender.Close(ctx); err != nil {
+	// Background work sends emails, so it finishes before the sender closes.
+	jobsErr := a.jobs.Close(ctx)
+	if err := errors.Join(jobsErr, a.sender.Close(ctx)); err != nil {
 		return fmt.Errorf("auth: closing: %w", err)
 	}
 	return nil

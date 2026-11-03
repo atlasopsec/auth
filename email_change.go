@@ -70,7 +70,7 @@ func (a *Auth) requestEmailChange(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case err == nil:
 		// Taken: tell its owner, as for a sign-up with their address.
-		if err := a.notifyExistingAccount(r, req.Email); err != nil {
+		if err := a.notifyExistingAccount(ctx, req.Email); err != nil {
 			httpapi.WriteInternalError(w, r, a.log, err)
 			return
 		}

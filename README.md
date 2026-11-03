@@ -64,7 +64,7 @@ OnUserCreated: func(ctx context.Context, tx pgx.Tx, u auth.User) error {
 },
 ```
 
-The sign-up is rolled back and logged at Info. In verify first mode (the default), the response is the same `202` an accepted sign-up gets, and no email is sent, so nobody can use the endpoint to learn which addresses are allowed. With `AllowUnverifiedLogin`, and for sign-ups with a provider, the answer is `403 sign_up_not_allowed`. Any other error from the hook is still a `500`.
+The sign-up is rolled back and logged at Info. In verify first mode (the default), the response is the same `202` an accepted sign-up gets, and no email is sent, so nobody can use the endpoint to learn which addresses are allowed. With `AllowUnverifiedLogin`, and for sign-ups with a provider, the answer is `403 sign_up_not_allowed`. Any other error from the hook is logged as an error. With `AllowUnverifiedLogin`, and for sign-ups with a provider, it's answered with a `500`. In verify first mode the `202` has already been sent: an email and password sign-up answers before creating the user, so its timing doesn't reveal whether the address has an account, and the hook runs just after.
 
 ## Users locked out of 2FA
 

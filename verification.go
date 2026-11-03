@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -22,8 +23,9 @@ type emailRequest struct {
 }
 
 // requestVerification sends a new verification link. It always answers
-// 202, whether or not the email has an account, so it can't be used to
-// find accounts.
+// 202, whether or not the email has an unverified account, and finds the
+// account after answering, so neither the response nor its timing can be
+// used to find accounts.
 func (a *Auth) requestVerification(w http.ResponseWriter, r *http.Request) {
 	var req emailRequest
 	if err := httpapi.Decode(w, r, &req); err != nil {
@@ -39,22 +41,12 @@ func (a *Auth) requestVerification(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	row, err := a.q.GetUserByEmail(r.Context(), req.Email)
-	switch {
-	case errors.Is(err, pgx.ErrNoRows):
-	case err != nil:
-		httpapi.WriteInternalError(w, r, a.log, err)
-		return
-	case row.EmailVerifiedAt == nil:
-		tok, t, err := a.tokens.Create(r.Context(), row.ID, emailtoken.VerifyEmail, "")
-		if err != nil && !errors.Is(err, emailtoken.ErrCooldown) {
-			httpapi.WriteInternalError(w, r, a.log, err)
-			return
-		}
-		if err == nil {
-			a.sendEmail(row.Email, a.emails.VerifyEmail, emailtoken.VerifyEmail, tok, t.ID)
-		}
-	}
+	email := req.Email
+	a.afterResponse(r, func(ctx context.Context) error {
+		return a.emailLinkIfAccount(ctx, email, emailtoken.VerifyEmail, a.emails.VerifyEmail, func(u db.AuthUser) bool {
+			return u.EmailVerifiedAt == nil
+		})
+	})
 	w.WriteHeader(http.StatusAccepted)
 }
 

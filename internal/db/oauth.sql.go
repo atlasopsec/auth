@@ -104,6 +104,18 @@ func (q *Queries) CreateOAuthFlow(ctx context.Context, arg CreateOAuthFlowParams
 	return err
 }
 
+const deleteExpiredAppleNonces = `-- name: DeleteExpiredAppleNonces :execrows
+DELETE FROM auth.used_apple_nonces WHERE expires_at < $1
+`
+
+func (q *Queries) DeleteExpiredAppleNonces(ctx context.Context, now time.Time) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteExpiredAppleNonces, now)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteOAuthAccount = `-- name: DeleteOAuthAccount :one
 DELETE FROM auth.oauth_accounts WHERE id = $1 AND user_id = $2 RETURNING provider
 `
@@ -242,6 +254,40 @@ func (q *Queries) ListOAuthAccounts(ctx context.Context, userID uuid.UUID) ([]Au
 		return nil, err
 	}
 	return items, nil
+}
+
+const useAppleNonce = `-- name: UseAppleNonce :execrows
+INSERT INTO auth.used_apple_nonces AS u (id, nonce_hash, expires_at, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $4)
+ON CONFLICT (nonce_hash) DO UPDATE
+    SET id = EXCLUDED.id, expires_at = EXCLUDED.expires_at, updated_at = EXCLUDED.updated_at
+    WHERE u.expires_at < $4
+`
+
+type UseAppleNonceParams struct {
+	ID        uuid.UUID
+	NonceHash []byte
+	ExpiresAt time.Time
+	Now       time.Time
+}
+
+// Records that an Apple identity token with this nonce signed someone in.
+// It affects no rows if a token that hasn't expired already used the
+// nonce: that's a replay. An expired one's row is reused, since its token
+// is refused anyway. The row has to have expired before @now, which is
+// taken before the token's expiry was checked, so the same token can't
+// slip through at the moment it expires.
+func (q *Queries) UseAppleNonce(ctx context.Context, arg UseAppleNonceParams) (int64, error) {
+	result, err := q.db.Exec(ctx, useAppleNonce,
+		arg.ID,
+		arg.NonceHash,
+		arg.ExpiresAt,
+		arg.Now,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const useOAuthFlow = `-- name: UseOAuthFlow :exec

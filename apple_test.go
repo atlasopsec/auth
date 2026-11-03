@@ -6,6 +6,9 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/atlasopsec/auth/internal/oauth/oauthtest"
 	"github.com/atlasopsec/auth/internal/testdb"
@@ -110,5 +113,137 @@ func TestUnlinkApple(t *testing.T) {
 	}
 	if got := f.lastSubject(testEmail); got != "Apple sign-in was removed from your Example account" {
 		t.Errorf("last email = %q", got)
+	}
+}
+
+// usedNonces counts the recorded nonces matching nonce.
+func (f oauthFixture) usedNonces(t *testing.T, nonce string) int {
+	t.Helper()
+	var n int
+	if err := f.pool.QueryRow(context.Background(), `SELECT count(*) FROM auth.used_apple_nonces WHERE nonce_hash = $1`, token.Hash(nonce)).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+func (f oauthFixture) sessionCount(t *testing.T, userID uuid.UUID) int {
+	t.Helper()
+	var n int
+	if err := f.pool.QueryRow(context.Background(), `SELECT count(*) FROM auth.sessions WHERE user_id = $1`, userID).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+func TestAppleSignInRefusesReplay(t *testing.T) {
+	t.Parallel()
+	f := setupOAuth(t, Config{})
+	u := oauthtest.AppleUser{Subject: "a-1", Email: testEmail, EmailVerified: true}
+	nonce := token.New()
+	captured := appleBody(f.apple.IdentityToken(u, nonce), nonce)
+
+	l := loginOf(t, f.do(t, http.MethodPost, "/v1/apple-sign-ins", captured))
+	// The same token and nonce, sent again before the token expires.
+	wantError(t, "replayed", f.do(t, http.MethodPost, "/v1/apple-sign-ins", captured), 401, "oauth_failed")
+	f.clock.advance(9 * time.Minute)
+	wantError(t, "replayed just before expiry", f.do(t, http.MethodPost, "/v1/apple-sign-ins", captured), 401, "oauth_failed")
+	if n := f.sessionCount(t, l.User.ID); n != 1 {
+		t.Errorf("%d sessions, want 1: the replays signed in", n)
+	}
+	if !strings.Contains(f.logs.String(), "nonce was already used") {
+		t.Error("the replay wasn't logged")
+	}
+
+	// The real app signing in again gets a new token and nonce, and that
+	// still works.
+	if again := loginOf(t, f.appleSignIn(t, oauthtest.AppleUser{Subject: "a-1"})); again.User.ID != l.User.ID {
+		t.Errorf("new sign-in: user %s, want %s", again.User.ID, l.User.ID)
+	}
+	// Only the nonce's hash is stored.
+	if n := f.usedNonces(t, nonce); n != 1 {
+		t.Errorf("%d rows with the nonce's hash, want 1", n)
+	}
+	var raw int
+	if err := f.pool.QueryRow(context.Background(), `SELECT count(*) FROM auth.used_apple_nonces WHERE position($1::bytea IN nonce_hash) > 0`, []byte(nonce)).Scan(&raw); err != nil || raw != 0 {
+		t.Errorf("rows containing the raw nonce = %d (%v), want 0", raw, err)
+	}
+}
+
+func TestAppleSignInConcurrentReplays(t *testing.T) {
+	t.Parallel()
+	f := setupOAuth(t, Config{})
+	nonce := token.New()
+	captured := appleBody(f.apple.IdentityToken(oauthtest.AppleUser{Subject: "a-1", Email: testEmail, EmailVerified: true}, nonce), nonce)
+
+	const n = 8
+	statuses := make(chan int, n)
+	for range n {
+		go func() { statuses <- f.do(t, http.MethodPost, "/v1/apple-sign-ins", captured).status }()
+	}
+	succeeded := 0
+	for range n {
+		switch s := <-statuses; s {
+		case http.StatusCreated:
+			succeeded++
+		case http.StatusUnauthorized:
+		default:
+			t.Errorf("status %d", s)
+		}
+	}
+	if succeeded != 1 {
+		t.Errorf("%d concurrent sign-ins with one token succeeded, want 1", succeeded)
+	}
+}
+
+func TestAppleSignInRefusedTokenDoesNotSpendNonce(t *testing.T) {
+	t.Parallel()
+	f := setupOAuth(t, Config{})
+	u := oauthtest.AppleUser{Subject: "a-1", Email: testEmail, EmailVerified: true}
+	nonce := token.New()
+
+	// Tokens that fail a check record nothing, so they can't use up the
+	// real app's nonce.
+	bad := []oauthtest.AppleUser{
+		{Subject: "a-1", Claims: map[string]any{"aud": "com.evil.app"}},
+		{Subject: "a-1", WrongKey: true},
+		{Subject: "a-1", Claims: map[string]any{"exp": f.clock.now().Add(-time.Minute).Unix()}},
+	}
+	for _, b := range bad {
+		wantError(t, "bad token", f.do(t, http.MethodPost, "/v1/apple-sign-ins", appleBody(f.apple.IdentityToken(b, nonce), nonce)), 401, "oauth_failed")
+	}
+	if n := f.usedNonces(t, nonce); n != 0 {
+		t.Fatalf("%d nonces recorded by refused tokens, want 0", n)
+	}
+	loginOf(t, f.do(t, http.MethodPost, "/v1/apple-sign-ins", appleBody(f.apple.IdentityToken(u, nonce), nonce)))
+}
+
+func TestAppleNoncesExpireWithTheirTokens(t *testing.T) {
+	t.Parallel()
+	f := setupOAuth(t, Config{})
+	u := oauthtest.AppleUser{Subject: "a-1", Email: testEmail, EmailVerified: true}
+	nonce := token.New()
+	loginOf(t, f.do(t, http.MethodPost, "/v1/apple-sign-ins", appleBody(f.apple.IdentityToken(u, nonce), nonce)))
+
+	// Cleanup keeps the nonce while its token works.
+	if err := f.auth.Cleanup(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if n := f.usedNonces(t, nonce); n != 1 {
+		t.Fatalf("after cleanup before expiry: %d nonces, want 1", n)
+	}
+
+	// After the token expires it's refused anyway. A new token that
+	// reuses the nonce (from an app that doesn't make a new one each time)
+	// works, even before cleanup has run.
+	f.clock.advance(11 * time.Minute)
+	loginOf(t, f.do(t, http.MethodPost, "/v1/apple-sign-ins", appleBody(f.apple.IdentityToken(u, nonce), nonce)))
+	wantError(t, "that token replayed", f.do(t, http.MethodPost, "/v1/apple-sign-ins", appleBody(f.apple.IdentityToken(u, nonce), nonce)), 401, "oauth_failed")
+
+	f.clock.advance(11 * time.Minute)
+	if err := f.auth.Cleanup(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if n := f.usedNonces(t, nonce); n != 0 {
+		t.Errorf("after cleanup past expiry: %d nonces, want 0", n)
 	}
 }
