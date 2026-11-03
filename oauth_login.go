@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/atlasopsec/auth/internal/db"
 	"github.com/atlasopsec/auth/internal/httpapi"
@@ -344,6 +345,30 @@ type oauthResult struct {
 // their session, or a 2FA challenge if they have 2FA, all or nothing. See
 // docs/api.md §9 for the rules.
 func (a *Auth) oauthLogIn(r *http.Request, provider string, id oauth.Identity, client session.Client) (oauthResult, error) {
+	res, err := a.oauthLogInOnce(r, provider, id, client)
+	if lostSignInRace(err) {
+		// Another sign-in for the same address or provider account
+		// committed first. Trying again finds what it created.
+		return a.oauthLogInOnce(r, provider, id, client)
+	}
+	return res, err
+}
+
+// lostSignInRace reports whether err is from creating a user or provider
+// link that a concurrent sign-in had just created.
+func lostSignInRace(err error) bool {
+	pgErr, ok := errors.AsType[*pgconn.PgError](err)
+	if !ok || pgErr.Code != "23505" {
+		return false
+	}
+	switch pgErr.ConstraintName {
+	case "idx_users_email", "oauth_accounts_provider_user_key", "oauth_accounts_user_provider_key":
+		return true
+	}
+	return false
+}
+
+func (a *Auth) oauthLogInOnce(r *http.Request, provider string, id oauth.Identity, client session.Client) (oauthResult, error) {
 	ctx := r.Context()
 	var res oauthResult
 	err := a.withTx(ctx, func(tx pgx.Tx) error {
