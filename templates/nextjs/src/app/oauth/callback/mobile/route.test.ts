@@ -24,6 +24,35 @@ describe("GET /oauth/callback/mobile", () => {
     );
   });
 
+  it("refuses a custom scheme when https is required", async () => {
+    vi.resetModules();
+    vi.stubEnv("MOBILE_OAUTH_REQUIRE_HTTPS", "true");
+    try {
+      await expect(call("code=c&state=s")).rejects.toThrow(
+        /MOBILE_OAUTH_REDIRECT_URL/,
+      );
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
+  });
+
+  it("passes code and state to an https link when https is required", async () => {
+    vi.resetModules();
+    vi.stubEnv("MOBILE_OAUTH_REQUIRE_HTTPS", "true");
+    vi.stubEnv("MOBILE_OAUTH_REDIRECT_URL", "https://app.example.com/oauth");
+    try {
+      const res = await call("code=c&state=s");
+      expect(res.status).toBe(303);
+      expect(res.headers.get("location")).toBe(
+        "https://app.example.com/oauth?code=c&state=s",
+      );
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
+  });
+
   it("is a 404 without a mobile app", async () => {
     vi.resetModules();
     vi.stubEnv("MOBILE_OAUTH_REDIRECT_URL", undefined);

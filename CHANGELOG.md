@@ -4,6 +4,19 @@ What changed in each release of `github.com/atlasopsec/auth`. The Next.js templa
 
 The exported Go API and the HTTP endpoints follow [semantic versioning](https://semver.org): a minor release only adds, and anything removed or changed waits for the next major version.
 
+## Unreleased
+
+### Security
+
+- Turning 2FA on or off, or replacing the recovery codes, now ends every other session, as a password change does.
+- An invitation now stops working once whoever sent it is removed from the organization, or no longer has `members:manage` and every permission in the invited role. Accepting it fails like an expired link (`422 token_invalid_or_expired`).
+- Changing a member's role or removing a member now checks `members:manage` again under the organization's lock, so someone demoted at the same moment can't still make the change.
+- The breached-password check's errors, which are logged as a warning, no longer include the request URL, which ended in the first 5 characters of the password's SHA-1 hash.
+
+### Fixed
+
+- Two first sign-ins with a provider for the same address at the same time, such as two tabs or Google and GitHub, both succeed as the same user. The slower one used to fail with `500 internal_error`.
+
 ## v1.2.0
 
 ### Security

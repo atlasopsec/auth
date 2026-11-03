@@ -636,6 +636,7 @@ Members are added by email invitation:
 
 - Inviting someone who's already a member: `409 already_member`.
 - Invitations can be listed and cancelled. Inviting the same address again replaces the earlier invitation.
+- **An invitation only works while its sender could still send it.** If the sender has been removed, or no longer has `members:manage` or every permission in the invited role, accepting it fails like an expired link (`422 token_invalid_or_expired`). Otherwise removing someone wouldn't take back the invitations they'd already sent.
 - The same 60-second cooldown applies per organization and address, until step 8's rate limiting.
 
 ### Endpoints
@@ -747,6 +748,7 @@ type Config struct {
 | `POST /v1/users/me/two-factor/recovery-codes` | `{ current_password, code }` | `200 { recovery_codes: [10] }`, replacing the old ones |
 
 - **Setup needs a verified email** (`403 email_not_verified`). Until then the account may have been created by someone else with this address, and 2FA they turned on would stand in the way of the owner's password reset.
+- **Turning 2FA on or off, or replacing the recovery codes, ends every other session,** as a password change does. Users make these changes after a scare, and a session someone else holds shouldn't survive them. A wrong code ends nothing.
 - **Setup needs the current password,** like other account-security changes. Confirming needs a working code from the app, so a bad scan can't lock anyone out (the standard).
 - **`otpauth_uri`** is the standard `otpauth://totp/…` link with the app name as issuer. The client turns it into a QR code; `secret` is for typing in by hand. Both are shown only during setup.
 - **Code settings:** 6 digits, 30-second steps, SHA-1. That's what every authenticator app supports.
@@ -949,7 +951,7 @@ POST /v1/oauth-flows/complete
   - another app that registered the same deep-link scheme could catch the redirect, send the code to the API, and get the user's session; and
   - an attacker could get a victim's browser to finish the attacker's flow and log in as the attacker (login CSRF).
 
-  The client verifier blocks both, because only the device that started the flow has it.
+  The client verifier blocks both, because only the device that started the flow has it. An https deep link (App Link or Universal Link) also keeps other apps from seeing the code at all; the template's `MOBILE_OAUTH_REQUIRE_HTTPS` enforces one.
 - **A flow works once, for 10 minutes.** Its PKCE verifier is stored encrypted with `EncryptionKey`.
 - **The flow is spent before the provider is called,** so it can't be finished twice even if that call fails. A wrong client verifier doesn't spend it, so a stray request can't cancel the real device's sign-in.
 

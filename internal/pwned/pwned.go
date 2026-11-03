@@ -13,9 +13,11 @@ import (
 	"context"
 	"crypto/sha1" //nolint:gosec // G505: SHA-1 is what the HIBP range API is keyed on; it isn't used for security here.
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -52,14 +54,14 @@ func (c *Checker) Breached(ctx context.Context, password string) (bool, error) {
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/range/"+prefix, nil)
 	if err != nil {
-		return false, fmt.Errorf("pwned: building request: %w", err)
+		return false, fmt.Errorf("pwned: building request: %w", withoutURL(err))
 	}
 	req.Header.Set("Add-Padding", "true")
 	req.Header.Set("User-Agent", "atlasopsec-auth")
 
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return false, fmt.Errorf("pwned: calling API: %w", err)
+		return false, fmt.Errorf("pwned: calling API: %w", withoutURL(err))
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
@@ -78,4 +80,13 @@ func (c *Checker) Breached(ctx context.Context, password string) (bool, error) {
 		return false, fmt.Errorf("pwned: reading response: %w", err)
 	}
 	return false, nil
+}
+
+// withoutURL drops the request URL from err. The URL ends in the hash
+// prefix, which is derived from the password, and callers log these errors.
+func withoutURL(err error) error {
+	if ue, ok := errors.AsType[*url.Error](err); ok {
+		return fmt.Errorf("%s: %w", ue.Op, ue.Err)
+	}
+	return err
 }

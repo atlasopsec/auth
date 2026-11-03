@@ -218,8 +218,10 @@ func (a *Auth) confirmTwoFactor(w http.ResponseWriter, r *http.Request) {
 		if err := q.ConfirmTOTPSecret(r.Context(), db.ConfirmTOTPSecretParams{UserID: c.user.ID, Step: step, Now: &now}); err != nil {
 			return fmt.Errorf("confirming 2FA: %w", err)
 		}
-		codes, err = a.replaceRecoveryCodes(r.Context(), q, c.user.ID)
-		return err
+		if codes, err = a.replaceRecoveryCodes(r.Context(), q, c.user.ID); err != nil {
+			return err
+		}
+		return endOtherSessions(r.Context(), q, c)
 	})
 	if a.writeTwoFactorError(w, r, err) {
 		return
@@ -299,7 +301,7 @@ func (a *Auth) disableTwoFactor(w http.ResponseWriter, r *http.Request) {
 		if err := q.DeleteRecoveryCodes(r.Context(), c.user.ID); err != nil {
 			return fmt.Errorf("deleting recovery codes: %w", err)
 		}
-		return nil
+		return endOtherSessions(r.Context(), q, c)
 	})
 	if a.writeTwoFactorError(w, r, err) {
 		return
@@ -338,8 +340,10 @@ func (a *Auth) regenerateRecoveryCodes(w http.ResponseWriter, r *http.Request) {
 			// A wrong code is committed, so it counts.
 			return err
 		}
-		codes, err = a.replaceRecoveryCodes(r.Context(), q, c.user.ID)
-		return err
+		if codes, err = a.replaceRecoveryCodes(r.Context(), q, c.user.ID); err != nil {
+			return err
+		}
+		return endOtherSessions(r.Context(), q, c)
 	})
 	if a.writeTwoFactorError(w, r, err) {
 		return
@@ -352,6 +356,17 @@ func (a *Auth) regenerateRecoveryCodes(w http.ResponseWriter, r *http.Request) {
 	a.event(r, EventRecoveryCodesRegenerated, &c.user.ID, nil, nil)
 	a.sendNotice(c.user.Email, a.emails.RecoveryCodesRegenerated)
 	httpapi.WriteJSON(w, r, http.StatusOK, recoveryCodesJSON{RecoveryCodes: codes})
+}
+
+// endOtherSessions ends every session of c's user except c's own. It's
+// called when 2FA is turned on or off or the recovery codes change, which
+// users do after a scare, so a session someone else holds doesn't survive
+// the change meant to lock them out.
+func endOtherSessions(ctx context.Context, q *db.Queries, c current) error {
+	if _, err := q.DeleteUserSessionsExcept(ctx, db.DeleteUserSessionsExceptParams{UserID: c.user.ID, KeepID: c.session.ID}); err != nil {
+		return fmt.Errorf("ending other sessions: %w", err)
+	}
+	return nil
 }
 
 // replaceRecoveryCodes deletes the user's recovery codes and creates new

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -507,5 +508,61 @@ func TestOAuthTakebackSendsNotice(t *testing.T) {
 	loginOf(t, f.googleSignIn(t, ada("g-1")))
 	if got, want := f.lastSubject(testEmail), "Google sign-in was added to your Example account"; got != want {
 		t.Errorf("subject = %q, want %q", got, want)
+	}
+}
+
+// Two first sign-ins for the same address at once both work, as the same
+// user, instead of the slower one failing to create the user again.
+func TestConcurrentFirstOAuthSignIns(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		second func(t *testing.T, f oauthFixture) (state, code, verifier string)
+	}{
+		{"same Google account twice", func(t *testing.T, f oauthFixture) (string, string, string) {
+			authURL, verifier := f.startFlow(t, providerGoogle, "web")
+			code, state := f.google.Authorize(authURL, ada("g-1"))
+			return state, code, verifier
+		}},
+		{"Google and GitHub", func(t *testing.T, f oauthFixture) (string, string, string) {
+			authURL, verifier := f.startFlow(t, providerGitHub, "web")
+			code, state := f.github.Authorize(authURL, oauthtest.GitHubUser{ID: 7, Emails: []oauthtest.GitHubEmail{{Email: testEmail, Primary: true, Verified: true}}})
+			return state, code, verifier
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			inHook, release := make(chan struct{}), make(chan struct{})
+			var calls atomic.Int32
+			f := setupOAuth(t, Config{Hooks: Hooks{OnUserCreated: func(context.Context, pgx.Tx, User) error {
+				// The first sign-in waits here, with the user created
+				// but not committed, until the second has caught up.
+				if calls.Add(1) == 1 {
+					close(inHook)
+					<-release
+				}
+				return nil
+			}}})
+
+			authURL, verifier := f.startFlow(t, providerGoogle, "web")
+			code, state := f.google.Authorize(authURL, ada("g-1"))
+			state2, code2, verifier2 := tt.second(t, f)
+
+			first, second := make(chan response, 1), make(chan response, 1)
+			go func() { first <- f.complete(t, state, code, verifier) }()
+			<-inHook
+			go func() { second <- f.complete(t, state2, code2, verifier2) }()
+			f.waitForLock(t, second)
+			close(release)
+
+			a, b := loginOf(t, <-first), loginOf(t, <-second)
+			if a.User.ID != b.User.ID {
+				t.Errorf("signed in as %s and %s, want the same user", a.User.ID, b.User.ID)
+			}
+			if n := f.userCount(t); n != 1 {
+				t.Errorf("%d users, want 1", n)
+			}
+		})
 	}
 }

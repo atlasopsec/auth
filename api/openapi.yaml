@@ -677,7 +677,8 @@ paths:
       description: >
         Takes the token from the invitation link (the part after
         `#token=`). The logged-in user's verified email must match the
-        invited address.
+        invited address. The invitation stops working if whoever sent it
+        is no longer a member who could send it.
       tags: [invitations]
       requestBody:
         required: true
@@ -760,7 +761,7 @@ paths:
       description: >
         Needs the current password and a code (TOTP or recovery). Users
         who must have 2FA can't. Wrong codes count toward the same limits
-        as at login.
+        as at login. Ends every other session.
       tags: [two-factor]
       requestBody:
         required: true
@@ -790,7 +791,7 @@ paths:
       description: >
         With a working code from the authenticator app. Returns the
         recovery codes, the only time they're shown. Wrong codes count
-        toward the same limits as at login.
+        toward the same limits as at login. Ends every other session.
       tags: [two-factor]
       requestBody:
         required: true
@@ -817,7 +818,8 @@ paths:
       summary: Replace recovery codes
       description: >
         Needs the current password and a code. The old codes stop working.
-        Wrong codes count toward the same limits as at login.
+        Wrong codes count toward the same limits as at login. Ends every
+        other session.
       tags: [two-factor]
       requestBody:
         required: true

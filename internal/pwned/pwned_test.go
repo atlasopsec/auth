@@ -100,3 +100,42 @@ func TestUnreachable(t *testing.T) {
 		t.Error("Breached() with the API down: error = nil, want an error")
 	}
 }
+
+// The errors end up in logs, so they mustn't include the request URL, which
+// ends in the start of the password's hash.
+func TestErrorsHideHashPrefix(t *testing.T) {
+	t.Parallel()
+	block := make(chan struct{})
+	t.Cleanup(func() { close(block) })
+
+	slow := server(t, func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-block:
+		case <-r.Context().Done():
+		}
+	})
+	slow.client.Timeout = 50 * time.Millisecond
+
+	down := httptest.NewServer(http.NotFoundHandler())
+	down.Close()
+
+	tests := []struct {
+		name string
+		c    *Checker
+	}{
+		{"too slow", slow},
+		{"unreachable", New(down.URL)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := tt.c.Breached(t.Context(), sample)
+			if err == nil {
+				t.Fatal("Breached() error = nil, want an error")
+			}
+			if strings.Contains(strings.ToUpper(err.Error()), samplePrefix) {
+				t.Errorf("Breached() error = %q, which includes the hash prefix %s", err, samplePrefix)
+			}
+		})
+	}
+}

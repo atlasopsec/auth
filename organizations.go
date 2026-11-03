@@ -348,7 +348,7 @@ func (a *Auth) changeMemberRole(w http.ResponseWriter, r *http.Request) {
 		return q.SetMembershipRole(r.Context(), db.SetMembershipRoleParams{
 			OrganizationID: c.org.ID, UserID: target, Role: req.Role, Now: a.now().UTC().Truncate(time.Microsecond),
 		})
-	}, c.user.ID)
+	}, c.user.ID, PermMembersManage)
 	if a.writeMemberChangeError(w, r, err) {
 		return
 	}
@@ -374,7 +374,11 @@ func (a *Auth) removeMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	self := target == c.user.ID
-	if !self && !Can(r.Context(), PermMembersManage) {
+	var need rbac.Permission
+	if !self {
+		need = PermMembersManage
+	}
+	if need != "" && !Can(r.Context(), need) {
 		writeForbidden(w, r)
 		return
 	}
@@ -393,7 +397,7 @@ func (a *Auth) removeMember(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		return q.DeleteMembership(r.Context(), db.DeleteMembershipParams{OrganizationID: c.org.ID, UserID: target})
-	}, c.user.ID)
+	}, c.user.ID, need)
 	if a.writeMemberChangeError(w, r, err) {
 		return
 	}
@@ -406,8 +410,10 @@ var errForbidden = errors.New("forbidden")
 
 // changeMembers runs change in a transaction that holds the organization's
 // lock, so concurrent changes can't leave it without an owner. change gets
-// the actor's role as it is now, inside the lock.
-func (a *Auth) changeMembers(ctx context.Context, orgID uuid.UUID, change func(q *db.Queries, actorRole string) error, actorID uuid.UUID) error {
+// the actor's role as it is now, inside the lock. If need is set, the actor
+// must still have it under the lock: the check before the lock may have
+// read a role that has changed since.
+func (a *Auth) changeMembers(ctx context.Context, orgID uuid.UUID, change func(q *db.Queries, actorRole string) error, actorID uuid.UUID, need rbac.Permission) error {
 	tx, err := a.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("beginning member change: %w", err)
@@ -421,6 +427,9 @@ func (a *Auth) changeMembers(ctx context.Context, orgID uuid.UUID, change func(q
 	actorRole, err := q.GetMembershipRole(ctx, db.GetMembershipRoleParams{OrganizationID: orgID, UserID: actorID})
 	if err != nil {
 		return err
+	}
+	if need != "" && !a.orgCan(actorRole, need) {
+		return errForbidden
 	}
 	if err := change(q, actorRole); err != nil {
 		return err

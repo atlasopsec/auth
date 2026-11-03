@@ -616,3 +616,56 @@ func TestMemberChangesWaitForTheOrganizationLock(t *testing.T) {
 		t.Errorf("status %d, body %s; want 409 last_owner", res.status, res.body)
 	}
 }
+
+// A manager demoted while their member change waits for the lock is
+// refused once it gets the lock, not allowed on the role checked before.
+func TestMemberChangesRecheckThePermissionUnderTheLock(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		method string
+		body   string
+	}{
+		{"changing a role", http.MethodPatch, `{"role":"member"}`},
+		{"removing a member", http.MethodDelete, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			f := setupOrgs(t, Config{})
+			tm := f.team(t)
+			ctx := context.Background()
+			manager, viewer := tm.users["manager"], tm.users["viewer"]
+
+			// Another change holds the lock and demotes the manager to
+			// member, which can't manage members but covers every
+			// permission viewer and member grant.
+			tx, err := f.pool.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = tx.Rollback(ctx) }()
+			if _, err := tx.Exec(ctx, `SELECT id FROM auth.organizations WHERE id = $1 FOR UPDATE`, tm.org); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tx.Exec(ctx, `UPDATE auth.memberships SET role = 'member' WHERE organization_id = $1 AND user_id = $2`, tm.org, manager.User.ID); err != nil {
+				t.Fatal(err)
+			}
+
+			result := make(chan response, 1)
+			go func() {
+				result <- f.do(t, tt.method, tm.path("/members/"+viewer.User.ID.String()), tt.body, withToken(manager.Token))
+			}()
+			f.waitForLock(t, result)
+			if err := tx.Commit(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if res := <-result; res.status != http.StatusForbidden {
+				t.Errorf("status %d, body %s; want 403", res.status, res.body)
+			}
+			if got := f.roleOf(t, tm.org, viewer.User.ID); got != "viewer" {
+				t.Errorf("viewer's role = %q, want viewer unchanged", got)
+			}
+		})
+	}
+}
