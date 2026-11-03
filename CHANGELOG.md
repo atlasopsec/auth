@@ -4,7 +4,9 @@ What changed in each release of `github.com/atlasopsec/auth`. The Next.js templa
 
 The exported Go API and the HTTP endpoints follow [semantic versioning](https://semver.org): a minor release only adds, and anything removed or changed waits for the next major version.
 
-## Unreleased
+## v1.3.0
+
+If you use the Next.js template, see its 0.4.0 changes for an option that requires an https mobile deep link.
 
 ### Security
 

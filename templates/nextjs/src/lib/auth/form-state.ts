@@ -1,4 +1,4 @@
-// From the auth module's Next.js template (github.com/atlasopsec/auth, templates/nextjs), version 0.3.0.
+// From the auth module's Next.js template (github.com/atlasopsec/auth, templates/nextjs), version 0.4.0.
 import { ApiError } from "@/lib/api/client";
 
 // FormState is what a server action tells its form: a message for the whole

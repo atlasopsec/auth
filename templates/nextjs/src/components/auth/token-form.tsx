@@ -1,6 +1,6 @@
 "use client";
 
-// From the auth module's Next.js template (github.com/atlasopsec/auth, templates/nextjs), version 0.3.0.
+// From the auth module's Next.js template (github.com/atlasopsec/auth, templates/nextjs), version 0.4.0.
 import { useActionState, type ReactNode } from "react";
 
 import { FormMessage } from "@/components/auth/field";

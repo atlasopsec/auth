@@ -2,7 +2,9 @@
 
 Changes to the Next.js template. Projects that copied it can check here what to copy again.
 
-## Unreleased
+## 0.4.0
+
+Works with the auth module's `v1.0.0` and later. Every copied file's header comment now says 0.4.0, but files not named here are otherwise unchanged.
 
 - **Added:** `MOBILE_OAUTH_REQUIRE_HTTPS=true` refuses a `MOBILE_OAUTH_REDIRECT_URL` that isn't https, so the server won't start with a custom-scheme deep link that another app could register. Off by default. See "Mobile deep links" in the README. Copy `src/lib/env.ts`.
 
