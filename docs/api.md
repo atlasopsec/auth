@@ -951,7 +951,7 @@ POST /v1/oauth-flows/complete
   - another app that registered the same deep-link scheme could catch the redirect, send the code to the API, and get the user's session; and
   - an attacker could get a victim's browser to finish the attacker's flow and log in as the attacker (login CSRF).
 
-  The client verifier blocks both, because only the device that started the flow has it.
+  The client verifier blocks both, because only the device that started the flow has it. An https deep link (App Link or Universal Link) also keeps other apps from seeing the code at all; the template's `MOBILE_OAUTH_REQUIRE_HTTPS` enforces one.
 - **A flow works once, for 10 minutes.** Its PKCE verifier is stored encrypted with `EncryptionKey`.
 - **The flow is spent before the provider is called,** so it can't be finished twice even if that call fails. A wrong client verifier doesn't spend it, so a stray request can't cancel the real device's sign-in.
 

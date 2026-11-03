@@ -50,14 +50,19 @@ const invoices = await callApi("/v1/invoices", invoiceListSchema, {
 
 ## Settings
 
-| Variable                    | Example                            | Required         |
-| --------------------------- | ---------------------------------- | ---------------- |
-| `API_URL`                   | `http://api.railway.internal:8080` | Yes              |
-| `CLIENT_IP_HEADER`          | `x-real-ip`                        | No (`x-real-ip`) |
-| `OAUTH_PROVIDERS`           | `google,github`                    | No (none)        |
-| `MOBILE_OAUTH_REDIRECT_URL` | `exampleapp://oauth`               | No               |
+| Variable                     | Example                            | Required         |
+| ---------------------------- | ---------------------------------- | ---------------- |
+| `API_URL`                    | `http://api.railway.internal:8080` | Yes              |
+| `CLIENT_IP_HEADER`           | `x-real-ip`                        | No (`x-real-ip`) |
+| `OAUTH_PROVIDERS`            | `google,github`                    | No (none)        |
+| `MOBILE_OAUTH_REDIRECT_URL`  | `exampleapp://oauth`               | No               |
+| `MOBILE_OAUTH_REQUIRE_HTTPS` | `true`                             | No (`false`)     |
 
 None are secrets, and none may have the `NEXT_PUBLIC_` prefix. `OAUTH_PROVIDERS` lists the providers turned on in the Go API's `Config.OAuth`; their buttons appear on the login and account pages. `MOBILE_OAUTH_REDIRECT_URL` is the mobile app's deep link; without it, `/oauth/callback/mobile` answers `404`.
+
+### Mobile deep links
+
+Any app can register a custom scheme such as `exampleapp://`, so another app on the same device could catch the sign-in redirect. It can't finish the sign-in, because only the app that started it has the client verifier, but it does see the provider's code. An https link (an Android App Link or iOS Universal Link) is tied to your app through your domain, so no other app gets it. Use one for new apps, and set `MOBILE_OAUTH_REQUIRE_HTTPS=true` so the web app refuses to start with a custom scheme. It's off by default because existing apps use custom schemes; a future major version will turn it on.
 
 The Go API must list Railway's private network in `Config.TrustedProxies`, so it believes the IP and user agent the web app forwards, and only from the web app.
 
