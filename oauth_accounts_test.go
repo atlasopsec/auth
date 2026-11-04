@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/uuid"
@@ -270,5 +271,28 @@ func TestOAuthNoticesCanBeCustomized(t *testing.T) {
 	}
 	if diff := cmp.Diff([]string{"GitHub", "GitHub"}, providers); diff != "" {
 		t.Errorf("template data providers (-want +got):\n%s", diff)
+	}
+}
+
+// TestLinkFinishesOnlyWithinThePrivilegedLimit checks finishing a link
+// flow applies the 12-hour session limit for privileged roles, as every
+// other request does. Here the user was made an admin after logging in,
+// so only that per-request check ends the session.
+func TestLinkFinishesOnlyWithinThePrivilegedLimit(t *testing.T) {
+	t.Parallel()
+	f := setupOAuth(t, Config{AllowUnverifiedLogin: true, TwoFactorRoles: []string{"admin"}})
+	v := f.verifiedUser(t, testEmail)
+	f.enableTwoFactor(t, v.Token)
+	f.addMember(t, f.newOrg(t), v.User.ID, "admin")
+
+	// Started just inside the limit, finished just after it.
+	f.clock.advance(12*time.Hour - 5*time.Minute)
+	authURL, verifier := f.startLink(t, v.Token, providerGitHub, testPassword)
+	f.clock.advance(6 * time.Minute)
+	code, state := f.github.Authorize(authURL, oauthtest.GitHubUser{ID: 7, Emails: []oauthtest.GitHubEmail{{Email: "ada@github.example", Primary: true}}})
+	wantError(t, "finishing after 12 hours", f.do(t, http.MethodPost, "/v1/oauth-flows/complete", completeBody(state, code, verifier), withToken(v.Token)), 401, "oauth_failed")
+	var n int
+	if err := f.pool.QueryRow(context.Background(), `SELECT count(*) FROM auth.oauth_accounts`).Scan(&n); err != nil || n != 0 {
+		t.Errorf("%d providers linked (%v), want 0", n, err)
 	}
 }
