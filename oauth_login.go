@@ -419,7 +419,7 @@ func (a *Auth) oauthLogInOnce(r *http.Request, provider string, id oauth.Identit
 			return err
 		}
 		if tf.enabled {
-			if err := a.checkPaused(ctx, q, userID); err != nil {
+			if err := a.checkPaused(ctx, q, userID, ""); err != nil {
 				return err
 			}
 			res.challenge, res.expires, err = a.createChallenge(ctx, q, userID, client)

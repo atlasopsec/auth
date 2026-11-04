@@ -160,6 +160,7 @@ type AuthTwoFactorFailure struct {
 	UserID    uuid.UUID
 	CreatedAt time.Time
 	UpdatedAt time.Time
+	DeviceKey *string
 }
 
 type AuthUsedAppleNonce struct {

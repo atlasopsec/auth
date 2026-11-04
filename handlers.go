@@ -317,7 +317,8 @@ func (a *Auth) logIn(w http.ResponseWriter, r *http.Request) {
 	// now, before the slow password check, so attempts sent at once can't
 	// all get through; a right password takes it back.
 	from := a.clientIP(r)
-	device := a.deviceKey(req.DeviceToken, req.Email)
+	dev := a.parseDevice(req.DeviceToken, req.Email)
+	device := dev.key
 	wait, claim, err := a.claimLoginAttempt(r.Context(), req.Email, from, device)
 	if err != nil {
 		httpapi.WriteInternalError(w, r, a.log, err)
@@ -367,9 +368,10 @@ func (a *Auth) logIn(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteInternalError(w, r, a.log, err)
 		return
 	}
-	deviceToken := a.newDeviceToken(req.Email)
+	// The same device keeps its ID, and that a 2FA code was entered on it.
+	deviceToken := a.newDeviceToken(req.Email, dev, dev.twoFactor)
 	if tf.enabled {
-		a.writeChallenge(w, r, row.ID, session.Client(req.Client), &deviceToken)
+		a.writeChallenge(w, r, row.ID, session.Client(req.Client), &deviceToken, dev.twoFactorScope())
 		return
 	}
 

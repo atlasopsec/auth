@@ -87,18 +87,24 @@ func (q *Queries) CreateTwoFactorChallenge(ctx context.Context, arg CreateTwoFac
 }
 
 const createTwoFactorFailure = `-- name: CreateTwoFactorFailure :exec
-INSERT INTO auth.two_factor_failures (id, user_id, created_at, updated_at)
-VALUES ($1, $2, $3, $3)
+INSERT INTO auth.two_factor_failures (id, user_id, device_key, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $4)
 `
 
 type CreateTwoFactorFailureParams struct {
-	ID     uuid.UUID
-	UserID uuid.UUID
-	Now    time.Time
+	ID        uuid.UUID
+	UserID    uuid.UUID
+	DeviceKey *string
+	Now       time.Time
 }
 
 func (q *Queries) CreateTwoFactorFailure(ctx context.Context, arg CreateTwoFactorFailureParams) error {
-	_, err := q.db.Exec(ctx, createTwoFactorFailure, arg.ID, arg.UserID, arg.Now)
+	_, err := q.db.Exec(ctx, createTwoFactorFailure,
+		arg.ID,
+		arg.UserID,
+		arg.DeviceKey,
+		arg.Now,
+	)
 	return err
 }
 
@@ -265,20 +271,29 @@ func (q *Queries) GetTwoFactorChallengeUser(ctx context.Context, tokenHash []byt
 const nthRecentTwoFactorFailure = `-- name: NthRecentTwoFactorFailure :one
 SELECT created_at FROM auth.two_factor_failures
 WHERE user_id = $1 AND created_at > $2
+  AND device_key IS NOT DISTINCT FROM $3::text
 ORDER BY created_at DESC
-OFFSET $3 LIMIT 1
+OFFSET $4 LIMIT 1
 `
 
 type NthRecentTwoFactorFailureParams struct {
-	UserID uuid.UUID
-	Since  time.Time
-	N      int32
+	UserID    uuid.UUID
+	Since     time.Time
+	DeviceKey *string
+	N         int32
 }
 
 // Returns the time of the user's nth most recent wrong code since @since
 // (counting from 0), if there are that many.
+// Counts within one scope: a device's own failures, or the account-wide
+// ones when device_key is NULL.
 func (q *Queries) NthRecentTwoFactorFailure(ctx context.Context, arg NthRecentTwoFactorFailureParams) (time.Time, error) {
-	row := q.db.QueryRow(ctx, nthRecentTwoFactorFailure, arg.UserID, arg.Since, arg.N)
+	row := q.db.QueryRow(ctx, nthRecentTwoFactorFailure,
+		arg.UserID,
+		arg.Since,
+		arg.DeviceKey,
+		arg.N,
+	)
 	var created_at time.Time
 	err := row.Scan(&created_at)
 	return created_at, err

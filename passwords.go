@@ -213,7 +213,7 @@ func (a *Auth) resetPassword(ctx context.Context, userID, tokenID uuid.UUID, has
 				// The email was verified after the request was checked.
 				return errResetCodeRequired
 			}
-			if res.check, err = a.checkLoginCode(ctx, q, userID, code, ip); err != nil {
+			if res.check, err = a.checkLoginCode(ctx, q, userID, code, ip, ""); err != nil {
 				return err
 			}
 			if !res.check.ok {
