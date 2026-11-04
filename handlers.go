@@ -313,10 +313,12 @@ func (a *Auth) logIn(w http.ResponseWriter, r *http.Request) {
 	}
 	// After repeated failures, an attempt that comes too early is refused
 	// without checking the password, so waiting can't be skipped by
-	// guessing faster.
+	// guessing faster. An attempt that may go ahead is counted as a failure
+	// now, before the slow password check, so attempts sent at once can't
+	// all get through; a right password takes it back.
 	from := a.clientIP(r)
 	device := a.deviceKey(req.DeviceToken, req.Email)
-	wait, err := a.loginWait(r.Context(), req.Email, from, device)
+	wait, claim, err := a.claimLoginAttempt(r.Context(), req.Email, from, device)
 	if err != nil {
 		httpapi.WriteInternalError(w, r, a.log, err)
 		return
@@ -332,7 +334,7 @@ func (a *Auth) logIn(w http.ResponseWriter, r *http.Request) {
 		// password check's worth of work so the response takes as long as
 		// a wrong password would, and count it the same.
 		password.SimulateVerify(req.Password)
-		a.wrongPassword(w, r, nil, req.Email, from, device)
+		a.wrongPassword(w, r, nil)
 		return
 	}
 	if err != nil {
@@ -345,10 +347,10 @@ func (a *Auth) logIn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !ok {
-		a.wrongPassword(w, r, &row.ID, req.Email, from, device)
+		a.wrongPassword(w, r, &row.ID)
 		return
 	}
-	if err := a.clearLoginFailures(r.Context(), req.Email, from, device); err != nil {
+	if err := a.loginSucceeded(r.Context(), claim); err != nil {
 		httpapi.WriteInternalError(w, r, a.log, err)
 		return
 	}
@@ -384,14 +386,10 @@ func (a *Auth) logIn(w http.ResponseWriter, r *http.Request) {
 	httpapi.WriteJSON(w, r, http.StatusCreated, res)
 }
 
-// wrongPassword counts a failed login and answers it. userID is nil for an
-// email without a password. device is the device token's key, or "".
-func (a *Auth) wrongPassword(w http.ResponseWriter, r *http.Request, userID *uuid.UUID, email, ip, device string) {
+// wrongPassword answers a failed login, which claimLoginAttempt already
+// counted. userID is nil for an email without a password.
+func (a *Auth) wrongPassword(w http.ResponseWriter, r *http.Request, userID *uuid.UUID) {
 	a.event(r, EventLoginFailed, userID, nil, map[string]string{"method": "password"})
-	if err := a.recordLoginFailure(r.Context(), email, ip, device); err != nil {
-		httpapi.WriteInternalError(w, r, a.log, err)
-		return
-	}
 	writeInvalidCredentials(w, r)
 }
 
