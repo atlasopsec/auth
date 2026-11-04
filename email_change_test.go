@@ -297,3 +297,34 @@ func TestEmailChangeConfirmedConcurrently(t *testing.T) {
 		t.Errorf("old address got %d notices, want 1", got)
 	}
 }
+
+// TestEmailChangeWorkIsAfterTheResponse checks whether the new address is
+// taken, and the emails that follow, are worked out after responding: a
+// failure there is logged, not answered, so the response can't differ for
+// a taken address.
+func TestEmailChangeWorkIsAfterTheResponse(t *testing.T) {
+	t.Parallel()
+	f := verifyFirst(t)
+	l := f.verifiedUser(t, testEmail)
+	const taken = "grace@example.com"
+	f.verifiedUser(t, taken)
+	f.clock.advance(emailtoken.Cooldown)
+	// Every new email link fails, as a database error would.
+	if _, err := f.pool.Exec(context.Background(), `
+		CREATE FUNCTION fail_email_tokens() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN RAISE EXCEPTION 'email tokens are failing'; END $$;
+		CREATE TRIGGER fail_email_tokens BEFORE INSERT ON auth.email_tokens
+		FOR EACH ROW EXECUTE FUNCTION fail_email_tokens();`); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, addr := range []string{taken, newEmail} {
+		if res := f.requestEmailChange(t, l.Token, addr); res.status != http.StatusAccepted {
+			t.Errorf("%s: status %d, body %s; want 202", addr, res.status, res.body)
+		}
+	}
+	f.sent()
+	if got := f.logs.String(); strings.Count(got, "background work failed") != 2 {
+		t.Errorf("logs = %s; want both failures logged", got)
+	}
+}
