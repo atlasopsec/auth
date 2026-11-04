@@ -1,4 +1,4 @@
-// From the auth module's Next.js template (github.com/atlasopsec/auth, templates/nextjs), version 0.4.0.
+// From the auth module's Next.js template (github.com/atlasopsec/auth, templates/nextjs), version 0.5.0.
 import Link from "next/link";
 
 import { SignUpForm } from "@/components/auth/sign-up-form";

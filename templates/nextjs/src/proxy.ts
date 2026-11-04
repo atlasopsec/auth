@@ -1,4 +1,4 @@
-// From the auth module's Next.js template (github.com/atlasopsec/auth, templates/nextjs), version 0.4.0.
+// From the auth module's Next.js template (github.com/atlasopsec/auth, templates/nextjs), version 0.5.0.
 import { NextResponse, type NextRequest } from "next/server";
 
 import { SESSION_COOKIE } from "@/lib/auth/cookies";

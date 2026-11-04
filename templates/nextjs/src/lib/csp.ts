@@ -1,4 +1,4 @@
-// From the auth module's Next.js template (github.com/atlasopsec/auth, templates/nextjs), version 0.4.0.
+// From the auth module's Next.js template (github.com/atlasopsec/auth, templates/nextjs), version 0.5.0.
 
 // Where each provider's sign-in button sends the browser. The button is a
 // form, and form-action covers the redirect a form submission ends in.
