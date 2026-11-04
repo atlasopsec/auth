@@ -205,6 +205,9 @@ var (
 	// user is. The details are logged, never returned.
 	errOAuthFailed           = errors.New("OAuth sign-in failed")
 	errOAuthEmailNotVerified = errors.New("provider email not verified")
+	// errOAuthLinkRequired is for a provider whose email matches an
+	// existing account, but which doesn't run that email's mailbox.
+	errOAuthLinkRequired = errors.New("provider must be linked from settings")
 )
 
 // completeOAuthFlow finishes signing in with a provider: with the code and
@@ -388,7 +391,7 @@ func (a *Auth) oauthLogInOnce(r *http.Request, provider string, id oauth.Identit
 			if _, ok := checkEmail(email); !ok {
 				return fmt.Errorf("%w: the provider's email address isn't usable", errOAuthFailed)
 			}
-			if userID, err = a.userForOAuthEmail(ctx, tx, email, now, &res); err != nil {
+			if userID, err = a.userForOAuthEmail(ctx, tx, email, id.EmailOwnedByProvider, now, &res); err != nil {
 				return err
 			}
 			// The account with that email may already have another account
@@ -437,7 +440,14 @@ func (a *Auth) oauthLogInOnce(r *http.Request, provider string, id oauth.Identit
 // whose email was never verified may have been created by someone else
 // with this address, so it's taken back first: everything that let anyone
 // else in is removed, as a password reset does.
-func (a *Auth) userForOAuthEmail(ctx context.Context, tx pgx.Tx, email string, now time.Time, res *oauthResult) (uuid.UUID, error) {
+//
+// An existing account is used only if the provider runs the email's
+// mailbox (owned). Otherwise the provider's "verified" may be years old:
+// whoever had a work address before could still sign in with it. Then it
+// returns errOAuthLinkRequired, and the user links the provider from
+// their settings once logged in. A new account is created either way,
+// since there's nobody to take over.
+func (a *Auth) userForOAuthEmail(ctx context.Context, tx pgx.Tx, email string, owned bool, now time.Time, res *oauthResult) (uuid.UUID, error) {
 	q := db.New(tx)
 	row, err := q.GetUserByEmailForUpdate(ctx, email)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -445,6 +455,9 @@ func (a *Auth) userForOAuthEmail(ctx context.Context, tx pgx.Tx, email string, n
 	}
 	if err != nil {
 		return uuid.UUID{}, fmt.Errorf("reading user: %w", err)
+	}
+	if !owned {
+		return uuid.UUID{}, errOAuthLinkRequired
 	}
 	res.linked = true
 	if row.EmailVerifiedAt != nil {
@@ -527,6 +540,9 @@ func (a *Auth) writeOAuthError(w http.ResponseWriter, r *http.Request, err error
 	case errors.Is(err, ErrSignUpNotAllowed):
 		a.logSignUpNotAllowed(r.Context())
 		writeSignUpNotAllowed(w, r)
+	case errors.Is(err, errOAuthLinkRequired):
+		httpapi.WriteError(w, r, http.StatusConflict, "oauth_link_required",
+			"An account already uses this email address. Log in the way you usually do, then link this provider from your account settings.", nil)
 	case errors.Is(err, errOAuthEmailNotVerified):
 		httpapi.WriteError(w, r, http.StatusForbidden, "oauth_email_not_verified",
 			"Your email address isn't verified with this provider. Verify it there, then try again.", nil)

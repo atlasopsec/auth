@@ -92,8 +92,12 @@ func (f oauthFixture) googleSignIn(t *testing.T, u oauthtest.GoogleUser) respons
 	return f.complete(t, state, code, verifier)
 }
 
+// workspace marks a Google identity as a Google Workspace account, whose
+// address Google runs, so it can sign in to an existing account by email.
+var workspace = map[string]any{"hd": "example.com"}
+
 func ada(sub string) oauthtest.GoogleUser {
-	return oauthtest.GoogleUser{Subject: sub, Email: testEmail, EmailVerified: true}
+	return oauthtest.GoogleUser{Subject: sub, Email: testEmail, EmailVerified: true, Claims: workspace}
 }
 
 func loginOf(t *testing.T, res response) loginJSON {
@@ -206,7 +210,7 @@ func TestOAuthSignUpNotAllowed(t *testing.T) {
 	}
 
 	// The hook runs only for new users: an existing account still signs in.
-	l := loginOf(t, f.googleSignIn(t, oauthtest.GoogleUser{Subject: "g-2", Email: existing.User.Email, EmailVerified: true}))
+	l := loginOf(t, f.googleSignIn(t, oauthtest.GoogleUser{Subject: "g-2", Email: existing.User.Email, EmailVerified: true, Claims: workspace}))
 	if l.User.ID != existing.User.ID {
 		t.Errorf("signed in as %s, want the existing user %s", l.User.ID, existing.User.ID)
 	}
@@ -233,7 +237,7 @@ func TestOAuthLinksVerifiedAccount(t *testing.T) {
 	existing := f.verifiedUser(t, testEmail)
 
 	// The provider's address differs only in case.
-	l := loginOf(t, f.googleSignIn(t, oauthtest.GoogleUser{Subject: "g-1", Email: strings.ToUpper(testEmail), EmailVerified: true}))
+	l := loginOf(t, f.googleSignIn(t, oauthtest.GoogleUser{Subject: "g-1", Email: strings.ToUpper(testEmail), EmailVerified: true, Claims: workspace}))
 	if l.User.ID != existing.User.ID {
 		t.Fatalf("signed in as %s, want the existing account %s", l.User.ID, existing.User.ID)
 	}
@@ -518,17 +522,22 @@ func TestConcurrentFirstOAuthSignIns(t *testing.T) {
 	tests := []struct {
 		name   string
 		second func(t *testing.T, f oauthFixture) (state, code, verifier string)
+		// linkRequired is set when the second can't join the account the
+		// first creates: GitHub doesn't run the address's mailbox, so it
+		// can sign in to an existing account only once linked from
+		// settings. It must still get that answer, not a 500.
+		linkRequired bool
 	}{
 		{"same Google account twice", func(t *testing.T, f oauthFixture) (string, string, string) {
 			authURL, verifier := f.startFlow(t, providerGoogle, "web")
 			code, state := f.google.Authorize(authURL, ada("g-1"))
 			return state, code, verifier
-		}},
+		}, false},
 		{"Google and GitHub", func(t *testing.T, f oauthFixture) (string, string, string) {
 			authURL, verifier := f.startFlow(t, providerGitHub, "web")
 			code, state := f.github.Authorize(authURL, oauthtest.GitHubUser{ID: 7, Emails: []oauthtest.GitHubEmail{{Email: testEmail, Primary: true, Verified: true}}})
 			return state, code, verifier
-		}},
+		}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -556,8 +565,10 @@ func TestConcurrentFirstOAuthSignIns(t *testing.T) {
 			f.waitForLock(t, second)
 			close(release)
 
-			a, b := loginOf(t, <-first), loginOf(t, <-second)
-			if a.User.ID != b.User.ID {
+			a := loginOf(t, <-first)
+			if tt.linkRequired {
+				wantError(t, "second sign-in", <-second, 409, "oauth_link_required")
+			} else if b := loginOf(t, <-second); a.User.ID != b.User.ID {
 				t.Errorf("signed in as %s and %s, want the same user", a.User.ID, b.User.ID)
 			}
 			if n := f.userCount(t); n != 1 {
@@ -582,5 +593,69 @@ func TestOAuthSignInWhenEmailHasAnotherProviderAccount(t *testing.T) {
 	}
 	if f.userCount(t) != 1 {
 		t.Errorf("%d users, want 1", f.userCount(t))
+	}
+}
+
+// TestOAuthSignsInToExistingAccountsOnlyByProviderOwnedEmail checks a
+// provider signs in to an existing account by its email only when the
+// provider runs that email's mailbox. Elsewhere "verified" may be years
+// old, as for a work address given to someone new, so the answer is
+// 409 oauth_link_required and nothing changes.
+func TestOAuthSignsInToExistingAccountsOnlyByProviderOwnedEmail(t *testing.T) {
+	t.Parallel()
+	f := setupOAuth(t, Config{AllowUnverifiedLogin: true})
+	existing := f.verifiedUser(t, testEmail)
+	gitHubSignIn := func(id int64, email string) response {
+		authURL, verifier := f.startFlow(t, providerGitHub, "web")
+		code, state := f.github.Authorize(authURL, oauthtest.GitHubUser{ID: id, Emails: []oauthtest.GitHubEmail{{Email: email, Primary: true, Verified: true}}})
+		return f.complete(t, state, code, verifier)
+	}
+
+	wantError(t, "Google, another domain", f.googleSignIn(t, oauthtest.GoogleUser{Subject: "g-1", Email: testEmail, EmailVerified: true}), 409, "oauth_link_required")
+	wantError(t, "GitHub", gitHubSignIn(7, testEmail), 409, "oauth_link_required")
+	apple := f.appleSignIn(t, oauthtest.AppleUser{Subject: "a-1", Email: testEmail, EmailVerified: true})
+	wantError(t, "Apple, another domain", apple, 409, "oauth_link_required")
+	// Apple can't be linked from settings, so the message doesn't say to.
+	if strings.Contains(string(apple.body), "settings") {
+		t.Errorf("Apple's answer %s points to settings, where Apple can't be linked", apple.body)
+	}
+	var linked int
+	if err := f.pool.QueryRow(context.Background(), `SELECT count(*) FROM auth.oauth_accounts`).Scan(&linked); err != nil || linked != 0 {
+		t.Errorf("%d providers linked (%v), want 0", linked, err)
+	}
+	if f.canLogIn(t, testEmail, testPassword) != http.StatusCreated {
+		t.Error("the password stopped working")
+	}
+
+	// Addresses the provider runs still sign in to the existing account.
+	gmail := f.verifiedUser(t, "ada@gmail.com")
+	if l := loginOf(t, f.googleSignIn(t, oauthtest.GoogleUser{Subject: "g-2", Email: "ada@gmail.com", EmailVerified: true})); l.User.ID != gmail.User.ID {
+		t.Errorf("Gmail signed in as %s, want the existing account %s", l.User.ID, gmail.User.ID)
+	}
+	if l := loginOf(t, f.googleSignIn(t, oauthtest.GoogleUser{Subject: "g-3", Email: testEmail, EmailVerified: true, Claims: workspace})); l.User.ID != existing.User.ID {
+		t.Errorf("Workspace signed in as %s, want the existing account %s", l.User.ID, existing.User.ID)
+	}
+
+	// A new address makes a new account, from any verified email.
+	if l := loginOf(t, gitHubSignIn(8, "grace@example.com")); l.User.Email != "grace@example.com" {
+		t.Errorf("new account = %+v", l.User)
+	}
+}
+
+// TestOAuthDoesNotTakeBackByUnownedEmail checks an account whose email was
+// never verified isn't taken back by a provider that doesn't run that
+// email's mailbox: its password, the way in it has, still works.
+func TestOAuthDoesNotTakeBackByUnownedEmail(t *testing.T) {
+	t.Parallel()
+	f := setupOAuth(t, Config{AllowUnverifiedLogin: true})
+	f.signUp(t, testEmail)
+
+	wantError(t, "Google, another domain", f.googleSignIn(t, oauthtest.GoogleUser{Subject: "g-1", Email: testEmail, EmailVerified: true}), 409, "oauth_link_required")
+	if f.canLogIn(t, testEmail, testPassword) != http.StatusCreated {
+		t.Error("the password stopped working: the account was taken back")
+	}
+	var verified bool
+	if err := f.pool.QueryRow(context.Background(), `SELECT email_verified_at IS NOT NULL FROM auth.users`).Scan(&verified); err != nil || verified {
+		t.Errorf("email verified = %v (%v), want false", verified, err)
 	}
 }

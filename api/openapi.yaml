@@ -940,7 +940,10 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
         "409":
           description: >
-            Link flows only: `oauth_account_in_use` (the provider account is
+            Sign-in: `oauth_link_required` (an account already uses the
+            provider's email, and the provider doesn't run that email's
+            mailbox, so the user logs in and links it from settings).
+            Link flows: `oauth_account_in_use` (the provider account is
             linked to another user) or `oauth_already_linked` (the user
             linked another account with this provider meanwhile).
           content:
@@ -994,6 +997,14 @@ paths:
             address, and no account is linked yet.
             `sign_up_not_allowed`: there's no account yet, and the project
             refused the sign-up.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: >
+            `oauth_link_required`: an account already uses the token's email,
+            and it isn't an iCloud or Hide My Email address, so the user logs
+            in and links Apple from settings.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }

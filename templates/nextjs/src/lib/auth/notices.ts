@@ -9,6 +9,8 @@ export const NOTICES = {
   "oauth-email-not-verified":
     "Your email address isn't verified with that provider. Verify it there, then try again.",
   "sign-up-not-allowed": "Sign-ups aren't open to that account.",
+  "oauth-link-required":
+    "An account already uses that email address. Log in the way you usually do, then link the provider from your account settings.",
   "oauth-linked": "The account was linked. You can now log in with it.",
   "oauth-account-in-use":
     "That account is already linked to another account here.",

@@ -17,6 +17,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -31,6 +32,22 @@ type Identity struct {
 	Email string
 	// EmailVerified reports whether the provider vouches for Email.
 	EmailVerified bool
+	// EmailOwnedByProvider reports whether the provider also runs Email's
+	// mailbox, such as a Gmail address at Google, so that its being
+	// verified shows the user can read it now. Elsewhere, verified only
+	// means they could once: a work address stays verified at Google or
+	// GitHub after it's given to someone else. Only an address like this
+	// signs in to an existing account by its email.
+	EmailOwnedByProvider bool
+}
+
+// domainOf returns email's domain, in lower case, or "".
+func domainOf(email string) string {
+	_, domain, ok := strings.Cut(email, "@")
+	if !ok {
+		return ""
+	}
+	return strings.ToLower(domain)
 }
 
 // Provider is one sign-in provider.
@@ -137,6 +154,9 @@ func verifyIDToken(ctx context.Context, v *oidc.IDTokenVerifier, issuers []strin
 	var claims struct {
 		Email         string `json:"email"`
 		EmailVerified bool   `json:"email_verified"`
+		// HostedDomain is set for Google Workspace accounts, whose
+		// addresses the organization's Workspace admins control.
+		HostedDomain string `json:"hd"`
 	}
 	if err := idTok.Claims(&claims); err != nil {
 		return Identity{}, fmt.Errorf("oauth: reading ID token claims: %w", err)
@@ -144,7 +164,14 @@ func verifyIDToken(ctx context.Context, v *oidc.IDTokenVerifier, issuers []strin
 	if idTok.Subject == "" {
 		return Identity{}, errors.New("oauth: ID token has no subject")
 	}
-	return Identity{Subject: idTok.Subject, Email: claims.Email, EmailVerified: claims.EmailVerified}, nil
+	return Identity{
+		Subject:       idTok.Subject,
+		Email:         claims.Email,
+		EmailVerified: claims.EmailVerified,
+		// Google's guidance: email_verified proves the user controls the
+		// address now only for Gmail, or with the hd claim.
+		EmailOwnedByProvider: claims.EmailVerified && (domainOf(claims.Email) == "gmail.com" || claims.HostedDomain != ""),
+	}, nil
 }
 
 // GitHubEndpoints are where GitHub's endpoints live. Tests point them at
@@ -219,7 +246,8 @@ func (g *github) Exchange(ctx context.Context, code, verifier, _, redirectURI st
 	}
 	id := Identity{Subject: strconv.FormatInt(user.ID, 10)}
 	// Only the primary address: it's the one the user chose to be reached
-	// at, so it's the one to match an account by.
+	// at, so it's the one to match an account by. GitHub runs nobody's
+	// mailbox, so EmailOwnedByProvider stays false.
 	for _, e := range emails {
 		if e.Primary {
 			id.Email, id.EmailVerified = e.Email, e.Verified
@@ -309,8 +337,9 @@ func (a *Apple) Verify(ctx context.Context, rawToken, nonce string) (Identity, t
 		return Identity{}, time.Time{}, errors.New("oauth: apple: token nonce doesn't match")
 	}
 	var claims struct {
-		Email         string   `json:"email"`
-		EmailVerified flexBool `json:"email_verified"`
+		Email          string   `json:"email"`
+		EmailVerified  flexBool `json:"email_verified"`
+		IsPrivateEmail flexBool `json:"is_private_email"`
 	}
 	if err := idTok.Claims(&claims); err != nil {
 		return Identity{}, time.Time{}, fmt.Errorf("oauth: apple: reading claims: %w", err)
@@ -318,7 +347,23 @@ func (a *Apple) Verify(ctx context.Context, rawToken, nonce string) (Identity, t
 	if idTok.Subject == "" {
 		return Identity{}, time.Time{}, errors.New("oauth: apple: token has no subject")
 	}
-	return Identity{Subject: idTok.Subject, Email: claims.Email, EmailVerified: bool(claims.EmailVerified)}, idTok.Expiry, nil
+	return Identity{
+		Subject:       idTok.Subject,
+		Email:         claims.Email,
+		EmailVerified: bool(claims.EmailVerified),
+		// Apple runs Hide My Email relay addresses and its own domains.
+		EmailOwnedByProvider: bool(claims.EmailVerified) && (bool(claims.IsPrivateEmail) || appleMailDomain(domainOf(claims.Email))),
+	}, idTok.Expiry, nil
+}
+
+// appleMailDomain reports whether domain is one of iCloud Mail's, Apple's
+// own mail service.
+func appleMailDomain(domain string) bool {
+	switch domain {
+	case "icloud.com", "me.com", "mac.com":
+		return true
+	}
+	return false
 }
 
 // flexBool reads a JSON boolean that Apple sends either as true or as the

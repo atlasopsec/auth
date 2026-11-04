@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -66,6 +67,12 @@ func (a *Auth) appleSignIn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	res, err := a.oauthLogIn(r, providerApple, id, session.ClientMobile)
+	if errors.Is(err, errOAuthLinkRequired) {
+		// Apple can't be linked from settings, so don't send them there.
+		httpapi.WriteError(w, r, http.StatusConflict, "oauth_link_required",
+			"An account already uses this email address. Log in the way you usually do.", nil)
+		return
+	}
 	if err != nil {
 		a.writeOAuthError(w, r, err)
 		return

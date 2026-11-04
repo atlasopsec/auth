@@ -972,7 +972,7 @@ POST /v1/apple-sign-ins
 - **Each nonce signs in once:** its SHA-256 is recorded in `auth.used_apple_nonces` until the token expires, and a token whose nonce is already recorded is refused with `401 oauth_failed`. So a token and nonce captured from a request (from a log, say) can't be sent again. The nonce is spent before the sign-in, so two requests with it can't both get in; if the sign-in then fails, the app shows the Apple sheet again for a new token. The app must make a new nonce for every sign-in. Tokens that fail a check don't spend their nonce.
 - **The session is always a `mobile` one,** so the body has no `client`.
 - **Apple is iOS only: no web or Android sign-in** (confirmed in review on 2026-10-29). Apple's sign-in API doesn't document PKCE, which the auth standard requires, and Apple only requires its sign-in on iOS. Someone who signed up with Apple on an iPhone uses a password on the web: a password reset sends them a link, through Apple's relay if they hid their address.
-- **Linking Apple from settings isn't offered.** A first Apple sign-in links by verified email like any provider; with Hide My Email the address won't match, so it makes a new account. Unlinking Apple works as for any provider.
+- **Linking Apple from settings isn't offered.** A first Apple sign-in links to an existing account by email only for an iCloud or Hide My Email address (see below); with Hide My Email the address won't match, so it makes a new account. An Apple ID at another address that an account already uses gets `409 oauth_link_required`, and since Apple can't be linked from settings, that user keeps logging in the way they did. Unlinking Apple works as for any provider.
 - **Checking signed tokens needs a JWT library.** Google's and Apple's ID tokens from the redirect flow are checked the same way. I'd use `github.com/coreos/go-oidc/v3`, the standard Go OpenID Connect library, rather than write signature checking ourselves. It's the one new dependency besides `golang.org/x/oauth2` (planned in design.md).
 
 ### Who gets logged in (Decision)
@@ -984,10 +984,16 @@ When a provider confirms who the user is:
    - **GitHub:** the primary email from `/user/emails`, if it's marked verified.
    - **Not verified:** refused with `403 oauth_email_not_verified` ("Verify your email with Google first"). Nothing is created.
 3. **An existing account with that email:**
+   - **Only if the provider runs that email's mailbox (Decision).** "Verified" proves the user can read the address now only where the provider controls it; elsewhere it may be years old. A work address stays verified at Google or GitHub after it's given to someone else, and whoever had it before could otherwise sign in to the new holder's account. The provider runs the mailbox for:
+     - **Google:** `@gmail.com` addresses, and Google Workspace accounts (the ID token has `hd`), as Google's own guidance says.
+     - **Apple:** Hide My Email relay addresses (`is_private_email`) and iCloud Mail (`@icloud.com`, `@me.com`, `@mac.com`).
+     - **GitHub:** never; it runs nobody's mailbox.
+
+     For any other address, nothing changes and the answer is `409 oauth_link_required`: the user logs in the way they usually do and links the provider from settings, which proves they own the account. That includes an account whose email isn't verified, which isn't taken back. The `409` shows that an account uses the address, but only to someone whose provider shows that address as verified, who would have been logged in before this rule.
    - **If its email is verified,** the provider is linked to it and the user is logged in. That's the same trust as a password reset link to that inbox.
    - **If it already has another account with this provider linked,** such as a second GitHub account with the same verified address, nothing changes and the answer is `401 oauth_failed`. A user has one account per provider, and the one linked isn't replaced.
    - **If its email isn't verified,** this is §2's pre-hijacking case: someone may have signed up with this address first. Its password, sessions, 2FA, pending email tokens, and linked providers are deleted. Then the email is marked verified, the provider is linked, and the real owner is logged in. A password reset takes back such an account the same way.
-4. **No account** → a new user with that email, already verified, with no password. `OnUserCreated` runs, as for any sign-up. If it returns `ErrSignUpNotAllowed`, nothing is created and the answer is `403 sign_up_not_allowed`. The provider has already shown that the user owns the address, so this reveals nothing to anyone else.
+4. **No account** → from any provider-verified email, owned by the provider or not, since there's nobody to take over: a new user with that email, already verified, with no password. `OnUserCreated` runs, as for any sign-up. If it returns `ErrSignUpNotAllowed`, nothing is created and the answer is `403 sign_up_not_allowed`. The provider has already shown that the user owns the address, so this reveals nothing to anyone else.
 
 Then, like every other way in:
 - **2FA applies:** a user with 2FA gets a challenge, not a session.
@@ -1049,6 +1055,7 @@ auth.used_apple_nonces  id, nonce_hash, expires_at, created_at, updated_at
 | `oauth_failed` | 401 | The flow is unknown, used, or expired; the client verifier doesn't match; or the provider refused the code or token. Already listed in design.md |
 | `oauth_email_not_verified` | 403 | The provider doesn't vouch for the email, and no account is linked yet |
 | `sign_up_not_allowed` | 403 | No account is linked yet, and `OnUserCreated` refused the sign-up with `ErrSignUpNotAllowed` |
+| `oauth_link_required` | 409 | Signing in with a provider whose email an existing account uses, at a provider that doesn't run that email's mailbox. Log in and link it from settings |
 | `oauth_account_in_use` | 409 | Linking a provider account that belongs to another user |
 | `oauth_already_linked` | 409 | Linking a second account with a provider the user already linked (one per provider) |
 | `last_login_method` | 409 | Unlinking the only way left to log in |
