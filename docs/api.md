@@ -1212,7 +1212,7 @@ Expired sessions, email tokens, accepted and expired invitations, 2FA challenges
 
 ### Database
 
-Migration `00008` (PR 1): `auth.rate_limits`, with an `expires_at` column (the window's end) for cleanup, plus the `id`, `created_at`, and `updated_at` every table has. Migration `00010` (PR 3): `auth.auth_events`, with indexes on `(user_id, created_at)` and `(created_at)`. `user_id` and `actor_id` become `NULL` when the user is deleted, so the record of what happened stays. Migration `00012` adds an index on `actor_id` (with ones on `auth.invitations (organization_id)` and `auth.oauth_flows (user_id)`), so deleting a user doesn't read every event to find the ones they made. It builds them with `CREATE INDEX CONCURRENTLY`, outside a transaction, and resets its `lock_timeout` before the connection goes back to the project's pool.
+Migration `00008` (PR 1): `auth.rate_limits`, with an `expires_at` column (the window's end) for cleanup, plus the `id`, `created_at`, and `updated_at` every table has. Migration `00010` (PR 3): `auth.auth_events`, with indexes on `(user_id, created_at)` and `(created_at)`. `user_id` and `actor_id` become `NULL` when the user is deleted, so the record of what happened stays. Migration `00012` adds an index on `actor_id` (with ones on `auth.invitations (organization_id)` and `auth.oauth_flows (user_id)`), so deleting a user doesn't read every event to find the ones they made. It builds them with `CREATE INDEX CONCURRENTLY`, outside a transaction. `Migrate` runs migrations on connections of its own, made from the pool's settings and closed afterwards, so a migration's `SET lock_timeout`, which outlasts its transaction, never reaches the project's pool.
 
 ### New error codes
 
