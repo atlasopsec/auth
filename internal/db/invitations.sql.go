@@ -79,6 +79,20 @@ func (q *Queries) CreateInvitation(ctx context.Context, arg CreateInvitationPara
 	return i, err
 }
 
+const deleteEndedInvitations = `-- name: DeleteEndedInvitations :execrows
+DELETE FROM auth.invitations WHERE accepted_at IS NOT NULL OR expires_at <= $1
+`
+
+// Accepted and expired invitations are refused anyway, and hold an email
+// address, which isn't kept longer than needed.
+func (q *Queries) DeleteEndedInvitations(ctx context.Context, now time.Time) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteEndedInvitations, now)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteInvitation = `-- name: DeleteInvitation :exec
 DELETE FROM auth.invitations WHERE id = $1
 `
