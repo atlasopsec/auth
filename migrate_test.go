@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -305,5 +306,87 @@ func TestDeletingUserDeletesSessions(t *testing.T) {
 	}
 	if remaining != 0 {
 		t.Errorf("%d sessions left after deleting their user, want 0", remaining)
+	}
+}
+
+// TestEveryForeignKeyHasAnIndex checks each foreign key's column leads a
+// full (not partial) index, so deleting the row it points at doesn't read
+// the whole table.
+func TestEveryForeignKeyHasAnIndex(t *testing.T) {
+	t.Parallel()
+	pool := testdb.New(t)
+	ctx := context.Background()
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatalf("Migrate() error = %v", err)
+	}
+	rows, err := pool.Query(ctx, `
+		SELECT c.conrelid::regclass::text || '.' || a.attname
+		FROM pg_constraint c
+		JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = c.conkey[1]
+		WHERE c.contype = 'f' AND c.connamespace = 'auth'::regnamespace
+		  AND NOT EXISTS (
+		    SELECT 1 FROM pg_index i
+		    WHERE i.indrelid = c.conrelid AND i.indkey[0] = c.conkey[1]
+		      AND i.indpred IS NULL AND i.indisvalid)
+		ORDER BY 1`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	missing, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(missing) != 0 {
+		t.Errorf("foreign keys without an index: %v", missing)
+	}
+}
+
+// TestIndexMigrationRebuildsAnInvalidIndex checks that if building an index
+// concurrently failed, leaving an invalid index behind, running Migrate
+// again replaces it with a valid one rather than keeping it.
+func TestIndexMigrationRebuildsAnInvalidIndex(t *testing.T) {
+	t.Parallel()
+	pool := testdb.New(t)
+	ctx := context.Background()
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatalf("Migrate() error = %v", err)
+	}
+	// As a failed concurrent build leaves things: the index is there but
+	// invalid, and the migration isn't recorded.
+	if _, err := pool.Exec(ctx, `
+		UPDATE pg_index SET indisvalid = false WHERE indexrelid = 'auth.idx_auth_events_actor_id'::regclass;
+		DELETE FROM auth.goose_db_version WHERE version_id = 12;`); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatalf("Migrate() again error = %v", err)
+	}
+	var valid bool
+	if err := pool.QueryRow(ctx, `SELECT indisvalid FROM pg_index WHERE indexrelid = 'auth.idx_auth_events_actor_id'::regclass`).Scan(&valid); err != nil || !valid {
+		t.Errorf("index valid = %v (%v), want true", valid, err)
+	}
+}
+
+// TestIndexMigrationResetsLockTimeout checks the index migration, which
+// runs outside a transaction on the project's pool, doesn't leave its
+// lock_timeout on the pool's connections.
+func TestIndexMigrationResetsLockTimeout(t *testing.T) {
+	t.Parallel()
+	pool := testdb.New(t)
+	ctx := context.Background()
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatalf("Migrate() error = %v", err)
+	}
+	for _, c := range pool.AcquireAllIdle(ctx) {
+		var timeout string
+		err := c.QueryRow(ctx, `SHOW lock_timeout`).Scan(&timeout)
+		c.Release()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if timeout != "0" {
+			t.Errorf("a pool connection has lock_timeout %s, want 0", timeout)
+		}
 	}
 }
