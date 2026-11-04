@@ -167,15 +167,17 @@ const listActiveSessions = `-- name: ListActiveSessions :many
 SELECT id, user_id, token_hash, client, ip, user_agent, last_used_at, expires_at, absolute_expires_at, created_at, updated_at FROM auth.sessions
 WHERE user_id = $1 AND expires_at > $2 AND absolute_expires_at > $2
 ORDER BY last_used_at DESC, id DESC
+LIMIT $3
 `
 
 type ListActiveSessionsParams struct {
-	UserID uuid.UUID
-	Now    time.Time
+	UserID  uuid.UUID
+	Now     time.Time
+	MaxRows int32
 }
 
 func (q *Queries) ListActiveSessions(ctx context.Context, arg ListActiveSessionsParams) ([]AuthSession, error) {
-	rows, err := q.db.Query(ctx, listActiveSessions, arg.UserID, arg.Now)
+	rows, err := q.db.Query(ctx, listActiveSessions, arg.UserID, arg.Now, arg.MaxRows)
 	if err != nil {
 		return nil, err
 	}

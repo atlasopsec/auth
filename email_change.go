@@ -61,32 +61,32 @@ func (a *Auth) requestEmailChange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx := r.Context()
 	if !a.passwordChecked(w, r, c.user.ID, req.CurrentPassword) {
 		return
 	}
 
-	_, err := a.q.GetUserByEmail(ctx, req.Email)
-	switch {
-	case err == nil:
-		// Taken: tell its owner, as for a sign-up with their address.
-		if err := a.notifyExistingAccount(ctx, req.Email); err != nil {
-			httpapi.WriteInternalError(w, r, a.log, err)
-			return
+	// Whether the address is taken is looked up after responding, so
+	// neither the response nor its timing shows it.
+	userID, email := c.user.ID, req.Email
+	a.afterResponse(r, func(ctx context.Context) error {
+		_, err := a.q.GetUserByEmail(ctx, email)
+		switch {
+		case err == nil:
+			// Taken: tell its owner, as for a sign-up with their address.
+			return a.notifyExistingAccount(ctx, email)
+		case !errors.Is(err, pgx.ErrNoRows):
+			return fmt.Errorf("reading user: %w", err)
 		}
-	case errors.Is(err, pgx.ErrNoRows):
-		tok, t, err := a.tokens.Create(ctx, c.user.ID, emailtoken.ChangeEmail, req.Email)
-		if err != nil && !errors.Is(err, emailtoken.ErrCooldown) {
-			httpapi.WriteInternalError(w, r, a.log, err)
-			return
+		tok, t, err := a.tokens.Create(ctx, userID, emailtoken.ChangeEmail, email)
+		if errors.Is(err, emailtoken.ErrCooldown) {
+			return nil
 		}
-		if err == nil {
-			a.sendEmail(req.Email, a.emails.EmailChange, emailtoken.ChangeEmail, tok, t.ID)
+		if err != nil {
+			return err
 		}
-	default:
-		httpapi.WriteInternalError(w, r, a.log, err)
-		return
-	}
+		a.sendEmail(email, a.emails.EmailChange, emailtoken.ChangeEmail, tok, t.ID)
+		return nil
+	})
 	a.logEvent(r, "auth: email change requested", c.user.ID)
 	w.WriteHeader(http.StatusAccepted)
 }

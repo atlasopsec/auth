@@ -2,6 +2,8 @@ package auth
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -581,5 +583,152 @@ func TestTwoFactorLoginKeepsSecretsOutOfLogs(t *testing.T) {
 		if s != "" && strings.Contains(logs, s) {
 			t.Errorf("logs contain %q", s)
 		}
+	}
+}
+
+// TestVerifyChallengeDuringTwoFactorReset checks a code sent while 2FA is
+// being reset waits for the reset, rather than deadlocking with it: the
+// reset locks the 2FA secret and then deletes the challenges, so finishing
+// a challenge must take its locks in the same order.
+func TestVerifyChallengeDuringTwoFactorReset(t *testing.T) {
+	t.Parallel()
+	f := setup(t, Hooks{})
+	l := f.signUp(t, testEmail)
+	secret, _ := f.enableTwoFactor(t, l.Token)
+	challenge := f.startChallenge(t, testEmail)
+	ctx := context.Background()
+
+	// A reset has locked the secret, as ResetTwoFactor and password resets
+	// do, and hasn't got to the challenges yet.
+	tx, err := f.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM auth.totp_secrets WHERE user_id = $1 FOR UPDATE`, l.User.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	result := make(chan response, 1)
+	go func() { result <- f.verify(t, challenge, f.code(secret)) }()
+	f.waitForLock(t, result)
+	if _, err := tx.Exec(ctx, `DELETE FROM auth.two_factor_challenges WHERE user_id = $1`, l.User.ID); err != nil {
+		t.Fatalf("reset deleting challenges: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	wantError(t, "challenge ended by the reset", <-result, 401, "two_factor_challenge_invalid")
+}
+
+func verifyWithDeviceBody(challenge, code, device string) string {
+	b, _ := json.Marshal(map[string]string{"challenge_token": challenge, "code": code, "device_token": device})
+	return string(b)
+}
+
+// logInOnKnownDevice logs in with the password and a right 2FA code,
+// keeping the device tokens as a client should, and returns the token
+// that records a code was entered on this device.
+func (f fixture) logInOnKnownDevice(t *testing.T, email string, secret []byte) string {
+	t.Helper()
+	res := f.do(t, http.MethodPost, "/v1/sessions", credentials(email, testPassword, "web"), fromIP(nextTestIP()))
+	challenge, device := challengeIn(t, res), deviceTokenOf(t, res)
+	done := f.do(t, http.MethodPost, "/v1/two-factor-challenges/verify", verifyWithDeviceBody(challenge, f.code(secret), *device))
+	if done.status != http.StatusCreated {
+		t.Fatalf("finishing the login: status %d, body %s", done.status, done.body)
+	}
+	known := deviceTokenOf(t, done)
+	if known == nil {
+		t.Fatal("no device token after the 2FA step")
+	}
+	// The code just used can't be used again, so later logins need the
+	// next one.
+	f.clock.advance(time.Minute)
+	return *known
+}
+
+// TestTwoFactorPauseSparesKnownDevices is the lockout case: someone who has
+// the password sends wrong codes until 2FA is paused for the account, but
+// the owner's browser, where a code was entered before, still logs in. A
+// device token that came with the password alone doesn't help them.
+func TestTwoFactorPauseSparesKnownDevices(t *testing.T) {
+	t.Parallel()
+	f := setup(t, Hooks{})
+	l := f.signUp(t, testEmail)
+	secret, _ := f.enableTwoFactor(t, l.Token)
+	known := f.logInOnKnownDevice(t, testEmail, secret)
+
+	// The attacker's own device token, from logging in with the password.
+	attacker := deviceTokenOf(t, f.do(t, http.MethodPost, "/v1/sessions", credentials(testEmail, testPassword, "web"), fromIP(nextTestIP())))
+	f.tripGuessingLimit(t, l.User.ID)
+	wantError(t, "without a device token", f.do(t, http.MethodPost, "/v1/sessions", credentials(testEmail, testPassword, "web"), fromIP(nextTestIP())), 429, "rate_limited")
+	wantError(t, "with a token from the password alone", f.logInWithDevice(t, testEmail, testPassword, nextTestIP(), *attacker), 429, "rate_limited")
+
+	res := f.logInWithDevice(t, testEmail, testPassword, nextTestIP(), known)
+	challenge, device := challengeIn(t, res), deviceTokenOf(t, res)
+	done := f.do(t, http.MethodPost, "/v1/two-factor-challenges/verify", verifyWithDeviceBody(challenge, f.code(secret), *device))
+	if done.status != http.StatusCreated {
+		t.Errorf("known device during the pause: status %d, body %s", done.status, done.body)
+	}
+}
+
+// TestKnownDeviceHasItsOwnTwoFactorLimit checks wrong codes from a known
+// device count toward a limit of its own: they pause it, and logging in
+// again with its new token doesn't start the count over, but they don't
+// pause the account for everyone else.
+func TestKnownDeviceHasItsOwnTwoFactorLimit(t *testing.T) {
+	t.Parallel()
+	f := setup(t, Hooks{})
+	l := f.signUp(t, testEmail)
+	secret, _ := f.enableTwoFactor(t, l.Token)
+	known := f.logInOnKnownDevice(t, testEmail, secret)
+
+	for wrong := 0; wrong < guessLimit; {
+		res := f.logInWithDevice(t, testEmail, testPassword, nextTestIP(), known)
+		challenge := challengeIn(t, res)
+		known = *deviceTokenOf(t, res)
+		for range maxChallengeAttempts {
+			f.do(t, http.MethodPost, "/v1/two-factor-challenges/verify", verifyWithDeviceBody(challenge, f.wrongCode(secret), known), fromIP(nextTestIP()))
+			wrong++
+		}
+	}
+	wantError(t, "the known device, after its own limit", f.logInWithDevice(t, testEmail, testPassword, nextTestIP(), known), 429, "rate_limited")
+	challengeIn(t, f.do(t, http.MethodPost, "/v1/sessions", credentials(testEmail, testPassword, "web"), fromIP(nextTestIP())))
+}
+
+// TestVerifyReturnsDeviceTokenOnlyIfSent checks the 2FA step answers with
+// a device token only to a client that sent one, as other ways to log in
+// than the password answer null.
+func TestVerifyReturnsDeviceTokenOnlyIfSent(t *testing.T) {
+	t.Parallel()
+	f := setup(t, Hooks{})
+	l := f.signUp(t, testEmail)
+	secret, _ := f.enableTwoFactor(t, l.Token)
+	res := f.verify(t, f.startChallenge(t, testEmail), f.code(secret))
+	if res.status != http.StatusCreated {
+		t.Fatalf("status %d, body %s", res.status, res.body)
+	}
+	if got := deviceTokenOf(t, res); got != nil {
+		t.Errorf("device_token = %q, want null", *got)
+	}
+}
+
+// TestDeviceTokensFromBeforeTwoFactorWasRecorded checks tokens issued
+// before they recorded 2FA still avoid the account-wide login delay, and
+// count as devices where no code was entered.
+func TestDeviceTokensFromBeforeTwoFactorWasRecorded(t *testing.T) {
+	t.Parallel()
+	f := setup(t, Hooks{})
+	payload := make([]byte, legacyDevicePayloadSize)
+	binary.BigEndian.PutUint64(payload, uint64(f.clock.now().Unix())) //nolint:gosec // G115: the test clock's Unix time is positive.
+	copy(payload[8:], "0123456789abcdef")
+	legacy := base64.RawURLEncoding.EncodeToString(f.auth.box.Seal(payload, deviceTokenData(testEmail)))
+
+	d := f.auth.parseDevice(legacy, testEmail)
+	if d.key == "" || d.twoFactor {
+		t.Errorf("legacy token = %+v, want a device where no code was entered", d)
+	}
+	if renewed := f.auth.parseDevice(f.auth.newDeviceToken(testEmail, d, d.twoFactor), testEmail); renewed.key != d.key {
+		t.Errorf("renewed token's key = %q, want the same device, %q", renewed.key, d.key)
 	}
 }

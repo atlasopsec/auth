@@ -1,4 +1,4 @@
-// From the auth module's Next.js template (github.com/atlasopsec/auth, templates/nextjs), version 0.4.0.
+// From the auth module's Next.js template (github.com/atlasopsec/auth, templates/nextjs), version 0.5.0.
 // The session cookie. The __Host- prefix makes browsers require Secure,
 // Path=/, and no Domain, so it only ever goes to this exact site.
 export const SESSION_COOKIE = "__Host-session";

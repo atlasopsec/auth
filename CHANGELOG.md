@@ -4,6 +4,54 @@ What changed in each release of `github.com/atlasopsec/auth`. The Next.js templa
 
 The exported Go API and the HTTP endpoints follow [semantic versioning](https://semver.org): a minor release only adds, and anything removed or changed waits for the next major version.
 
+## v1.5.0
+
+The fixes from a security audit.
+
+- **Run `Migrate` before deploying.** This release adds migrations `00012`, indexes built with `CREATE INDEX CONCURRENTLY`, and `00013`, a nullable column on `auth.two_factor_failures`. Neither changes existing rows.
+- **Signing in with Google, GitHub, or Apple** to an existing account by its email now needs an address the provider runs; see below.
+- **Mobile apps** should send `device_token` to the 2FA step and keep the one it returns.
+- **If you use the Next.js template,** its 0.5.0 needs this release.
+
+### Security
+
+- **Login delays hold under concurrent attempts.** The delay was checked before the password and the failure counted after it, so attempts sent at once, from many IPs, were all checked: about one guess per IP each time the account-wide delay ended, instead of one. Each attempt is now counted before its password is checked, under a lock, and taken back if the password is right.
+- **A provider signs in to an existing account by its email only when it runs that address,** answering `409 oauth_link_required` otherwise. A provider's "verified" can be years old: a work address stays verified at Google or GitHub after it's given to someone else, and whoever had it before could sign in to the new holder's account.
+  - **Counts as the provider's own:**
+    - **Google:** `@gmail.com`, and Google Workspace accounts (`hd`).
+    - **Apple:** Hide My Email and iCloud Mail addresses.
+    - **GitHub:** never.
+  - **Otherwise,** the user logs in the way they usually do and links the provider from settings. An account whose email isn't verified is no longer taken back by such a provider either. New accounts are still created from any verified address.
+  - **Apple can't be linked from settings,** so someone whose Apple ID uses another address that an account here already uses can't sign in with Apple.
+- **Devices where a 2FA code was entered get their own guessing limit.** Ten wrong codes in 15 minutes paused 2FA for the whole account, so anyone with the password could keep the owner from ever logging in.
+  - `POST /v1/two-factor-challenges/verify` now takes the `device_token` from the challenge. With a right code, it answers with a new one that records a code was entered on the device.
+  - Wrong codes sent with such a token count only toward that device's limit.
+  - A device token from the password alone doesn't count, since someone guessing codes has the password too.
+- **Inviting an address again no longer replaces an invitation you couldn't cancel,** such as an owner's invitation for a role you couldn't grant. The check runs under the organization's lock, with your current role.
+- **Finishing a link flow applies the 12-hour limit for privileged roles,** as every other request does.
+- **`POST /v1/email-changes` looks up the new address after responding,** like password resets and verification, so the response and its timing don't show whether it's taken. A database error there is logged instead of returning `500`.
+- **Email subjects are kept to one line:** control characters, such as a line break in an organization's name, become spaces. A `Mailer` that writes headers itself could otherwise be given extra ones.
+- **The cleanup job deletes accepted and expired invitations,** which hold email addresses and were kept forever.
+
+### Added
+
+- `device_token` in the request to, and the response from, `POST /v1/two-factor-challenges/verify`.
+- The `oauth_link_required` error code (`409`), from `POST /v1/oauth-flows/complete` and `POST /v1/apple-sign-ins`.
+
+### Changed
+
+- `GET /v1/sessions` returns at most the 100 most recently used sessions.
+- `Migrate` runs migrations on connections of its own, made from the pool's settings and closed afterwards. The pool's hooks, such as `AfterConnect`, don't run on them.
+
+### Fixed
+
+- **Migrations no longer leave a 5-second `lock_timeout` on a project's pool connection.** Since v1.4.0, migration `00011`'s `SET lock_timeout` outlasted its transaction on a connection `Migrate` had borrowed from the pool, so some of the project's queries gave up after waiting 5 seconds for a lock. A restart, such as deploying this release, clears it.
+- **Indexes on foreign keys that had none:** `auth.auth_events (actor_id)`, `auth.invitations (organization_id)`, and `auth.oauth_flows (user_id)`. Deleting a user or an organization no longer reads those whole tables.
+- **Signing in with a second account at a provider** returns `401 oauth_failed` instead of `500`. This is a second account whose verified email belongs to a user who already linked another account with that provider.
+- **Finishing a 2FA login no longer deadlocks** with a 2FA or password reset for the same user, which answered `500`.
+- **A panic in a project's `Mailer`** counts as a failed send, and is retried, instead of stopping the process.
+- **A client that disconnects mid-request** is logged at debug, not as an error.
+
 ## v1.4.0
 
 Run `Migrate` before deploying: this release adds the `auth.used_apple_nonces` table. In verify first mode (the default), `Hooks.OnUserCreated` now runs just after the sign-up response; see below.

@@ -204,7 +204,7 @@ func (a *Auth) confirmTwoFactor(w http.ResponseWriter, r *http.Request) {
 		}
 		now := a.now().UTC().Truncate(time.Microsecond)
 		var step int64
-		check, err = a.checkCodeLimited(r.Context(), q, c.user.ID, a.clientIP(r), func() (bool, error) {
+		check, err = a.checkCodeLimited(r.Context(), q, c.user.ID, a.clientIP(r), "", func() (bool, error) {
 			var ok bool
 			if step, ok = totp.Verify(secret, req.Code, now, row.LastUsedStep); !ok {
 				return false, errBadCode
@@ -291,7 +291,7 @@ func (a *Auth) disableTwoFactor(w http.ResponseWriter, r *http.Request) {
 	}
 	var check codeCheck
 	err = a.inTx(r.Context(), func(q *db.Queries) error {
-		if check, err = a.checkLoginCode(r.Context(), q, c.user.ID, req.Code, a.clientIP(r)); err != nil || !check.ok {
+		if check, err = a.checkLoginCode(r.Context(), q, c.user.ID, req.Code, a.clientIP(r), ""); err != nil || !check.ok {
 			// A wrong code is committed, so it counts.
 			return err
 		}
@@ -336,7 +336,7 @@ func (a *Auth) regenerateRecoveryCodes(w http.ResponseWriter, r *http.Request) {
 	var codes []string
 	var check codeCheck
 	err = a.inTx(r.Context(), func(q *db.Queries) error {
-		if check, err = a.checkLoginCode(r.Context(), q, c.user.ID, req.Code, a.clientIP(r)); err != nil || !check.ok {
+		if check, err = a.checkLoginCode(r.Context(), q, c.user.ID, req.Code, a.clientIP(r), ""); err != nil || !check.ok {
 			// A wrong code is committed, so it counts.
 			return err
 		}

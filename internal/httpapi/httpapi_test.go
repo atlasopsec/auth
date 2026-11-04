@@ -1,8 +1,12 @@
 package httpapi
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -243,6 +247,37 @@ func TestClient(t *testing.T) {
 			}
 			if gotIP != tt.wantIP || ua != tt.wantUA {
 				t.Errorf("Client() = (%q, %q), want (%q, %q)", gotIP, ua, tt.wantIP, tt.wantUA)
+			}
+		})
+	}
+}
+
+func TestWriteInternalErrorLogs(t *testing.T) {
+	t.Parallel()
+	gone, cancel := context.WithCancel(context.Background())
+	cancel()
+	for _, tt := range []struct {
+		name    string
+		ctx     context.Context
+		err     error
+		wantLog string
+	}{
+		{"a failure", context.Background(), errors.New("database is down"), "level=ERROR"},
+		{"a client that went away", gone, fmt.Errorf("reading user: %w", context.Canceled), "level=DEBUG"},
+		// Canceled by something other than the client is still an error.
+		{"canceled while the client waits", context.Background(), fmt.Errorf("reading user: %w", context.Canceled), "level=ERROR"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var logs bytes.Buffer
+			log := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+			w := httptest.NewRecorder()
+			WriteInternalError(w, httptest.NewRequestWithContext(tt.ctx, http.MethodGet, "/", nil), log, tt.err)
+			if w.Code != http.StatusInternalServerError {
+				t.Errorf("status %d, want 500", w.Code)
+			}
+			if got := logs.String(); !strings.Contains(got, tt.wantLog) {
+				t.Errorf("logs = %q, want %s", got, tt.wantLog)
 			}
 		})
 	}

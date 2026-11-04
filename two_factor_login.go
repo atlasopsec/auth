@@ -29,6 +29,8 @@ const (
 	// guessLimit wrong codes within guessWindow, across all of a user's
 	// challenges and password resets, pause code checks for that user
 	// until the window has passed. Step 8's rate limiting replaces this.
+	// Each device where a code was entered before has a count of its own
+	// (see device.twoFactorScope); everything else shares the user's.
 	guessLimit  = 10
 	guessWindow = 15 * time.Minute
 )
@@ -56,13 +58,14 @@ func (e pausedError) Error() string {
 }
 
 // checkPaused returns a pausedError if the user has reached the guessing
-// limit.
-func (a *Auth) checkPaused(ctx context.Context, q *db.Queries, userID uuid.UUID) error {
+// limit in scope: a device's own count, or "" for the account-wide one.
+func (a *Auth) checkPaused(ctx context.Context, q *db.Queries, userID uuid.UUID, scope string) error {
 	now := a.now().UTC().Truncate(time.Microsecond)
 	t, err := q.NthRecentTwoFactorFailure(ctx, db.NthRecentTwoFactorFailureParams{
-		UserID: userID,
-		Since:  now.Add(-guessWindow),
-		N:      guessLimit - 1,
+		UserID:    userID,
+		Since:     now.Add(-guessWindow),
+		DeviceKey: scopeKey(scope),
+		N:         guessLimit - 1,
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil
@@ -71,6 +74,14 @@ func (a *Auth) checkPaused(ctx context.Context, q *db.Queries, userID uuid.UUID)
 		return fmt.Errorf("checking 2FA guessing limit: %w", err)
 	}
 	return pausedError{until: t.Add(guessWindow)}
+}
+
+// scopeKey is scope as stored: NULL for the account-wide count.
+func scopeKey(scope string) *string {
+	if scope == "" {
+		return nil
+	}
+	return &scope
 }
 
 // codeCheck is the result of checkLoginCode.
@@ -86,9 +97,9 @@ type codeCheck struct {
 // transaction. A wrong code is reported in the result rather than as an
 // error, so the caller can commit the count. While the user's limit, or the
 // client IP's (ip, from ratelimit.IP), is reached it returns a pausedError
-// without checking the code.
-func (a *Auth) checkLoginCode(ctx context.Context, q *db.Queries, userID uuid.UUID, code, ip string) (codeCheck, error) {
-	return a.checkCodeLimited(ctx, q, userID, ip, func() (bool, error) {
+// without checking the code. scope is as for checkPaused.
+func (a *Auth) checkLoginCode(ctx context.Context, q *db.Queries, userID uuid.UUID, code, ip, scope string) (codeCheck, error) {
+	return a.checkCodeLimited(ctx, q, userID, ip, scope, func() (bool, error) {
 		return a.checkSecondFactor(ctx, q, userID, code)
 	})
 }
@@ -97,14 +108,14 @@ func (a *Auth) checkLoginCode(ctx context.Context, q *db.Queries, userID uuid.UU
 // errBadCode if it's wrong, under the guessing limits of checkLoginCode.
 // Every endpoint that takes a 2FA code goes through it, so no endpoint can
 // be used to guess codes faster.
-func (a *Auth) checkCodeLimited(ctx context.Context, q *db.Queries, userID uuid.UUID, ip string, check func() (usedRecovery bool, err error)) (codeCheck, error) {
+func (a *Auth) checkCodeLimited(ctx context.Context, q *db.Queries, userID uuid.UUID, ip, scope string, check func() (usedRecovery bool, err error)) (codeCheck, error) {
 	// Taking checkSecondFactor's lock first means concurrent wrong codes are
 	// counted one at a time, so the limit can't be overshot, and the
 	// warning is sent once.
 	if _, err := q.GetTOTPSecretForUpdate(ctx, userID); err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return codeCheck{}, fmt.Errorf("reading 2FA: %w", err)
 	}
-	if err := a.checkPaused(ctx, q, userID); err != nil {
+	if err := a.checkPaused(ctx, q, userID, scope); err != nil {
 		return codeCheck{}, err
 	}
 	reached, retry, err := a.limiter.Reached(ctx, limitWrongCodes, ip)
@@ -130,14 +141,14 @@ func (a *Auth) checkCodeLimited(ctx context.Context, q *db.Queries, userID uuid.
 	if err != nil {
 		return codeCheck{}, fmt.Errorf("generating 2FA failure ID: %w", err)
 	}
-	if err := q.CreateTwoFactorFailure(ctx, db.CreateTwoFactorFailureParams{ID: id, UserID: userID, Now: now}); err != nil {
+	if err := q.CreateTwoFactorFailure(ctx, db.CreateTwoFactorFailureParams{ID: id, UserID: userID, DeviceKey: scopeKey(scope), Now: now}); err != nil {
 		return codeCheck{}, fmt.Errorf("recording 2FA failure: %w", err)
 	}
 	// Counted outside the transaction, so it holds even if that rolls back.
 	if _, _, err := a.limiter.Hit(ctx, limitWrongCodes, ip); err != nil {
 		return codeCheck{}, err
 	}
-	err = a.checkPaused(ctx, q, userID)
+	err = a.checkPaused(ctx, q, userID, scope)
 	var paused pausedError
 	if err != nil && !errors.As(err, &paused) {
 		return codeCheck{}, err
@@ -184,9 +195,9 @@ func (a *Auth) createChallenge(ctx context.Context, q *db.Queries, userID uuid.U
 
 // writeChallenge starts a 2FA challenge and returns it in place of a
 // session, with deviceToken if it's set. While the user is at the guessing
-// limit, it refuses instead.
-func (a *Auth) writeChallenge(w http.ResponseWriter, r *http.Request, userID uuid.UUID, client session.Client, deviceToken *string) {
-	if err := a.checkPaused(r.Context(), a.q, userID); err != nil {
+// limit in scope (as for checkPaused), it refuses instead.
+func (a *Auth) writeChallenge(w http.ResponseWriter, r *http.Request, userID uuid.UUID, client session.Client, deviceToken *string, scope string) {
+	if err := a.checkPaused(r.Context(), a.q, userID, scope); err != nil {
 		a.writeLoginCodeError(w, r, err)
 		return
 	}
@@ -206,6 +217,9 @@ func writeChallengeJSON(w http.ResponseWriter, r *http.Request, tok string, expi
 type verifyChallengeRequest struct {
 	ChallengeToken string `json:"challenge_token"`
 	Code           string `json:"code"`
+	// DeviceToken is the one from the challenge, if the client keeps it.
+	// The response then has one that records the code was entered here.
+	DeviceToken string `json:"device_token"`
 }
 
 var errChallengeInvalid = errors.New("two-factor challenge is invalid or expired")
@@ -243,9 +257,23 @@ func (a *Auth) verifyChallenge(w http.ResponseWriter, r *http.Request) {
 		left  int64
 		// policy is set inside the transaction, from the user's roles.
 		policy session.Policy
+		dev    device
 	)
 	err := a.withTx(ctx, func(tx pgx.Tx) error {
 		q := db.New(tx)
+		// Lock the user's 2FA secret before the challenge: resetting 2FA or
+		// the password locks the secret and then deletes challenges, so
+		// taking the locks the other way round could deadlock with them.
+		userID, err := q.GetTwoFactorChallengeUser(ctx, token.Hash(req.ChallengeToken))
+		if errors.Is(err, pgx.ErrNoRows) {
+			return errChallengeInvalid
+		}
+		if err != nil {
+			return fmt.Errorf("reading 2FA challenge: %w", err)
+		}
+		if _, err := q.GetTOTPSecretForUpdate(ctx, userID); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("locking 2FA: %w", err)
+		}
 		ch, err := q.GetTwoFactorChallengeForUpdate(ctx, token.Hash(req.ChallengeToken))
 		if errors.Is(err, pgx.ErrNoRows) {
 			return errChallengeInvalid
@@ -262,8 +290,9 @@ func (a *Auth) verifyChallenge(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		policy = sessionPolicy(tf)
+		dev = a.parseDevice(req.DeviceToken, user.Email)
 
-		if check, err = a.checkLoginCode(ctx, q, ch.UserID, req.Code, a.clientIP(r)); err != nil {
+		if check, err = a.checkLoginCode(ctx, q, ch.UserID, req.Code, a.clientIP(r), dev.twoFactorScope()); err != nil {
 			return err
 		}
 		if !check.ok {
@@ -302,7 +331,12 @@ func (a *Auth) verifyChallenge(w http.ResponseWriter, r *http.Request) {
 	}
 	a.logEvent(r, "auth: user logged in", user.ID)
 	a.event(r, EventLoginSucceeded, &user.ID, nil, map[string]string{"method": "two_factor"})
-	httpapi.WriteJSON(w, r, http.StatusCreated, newLoginResponse(toUserJSON(userFromRow(user)), tok, s))
+	res := newLoginResponse(toUserJSON(userFromRow(user)), tok, s)
+	if dev.key != "" {
+		deviceToken := a.newDeviceToken(user.Email, dev, true)
+		res.DeviceToken = &deviceToken
+	}
+	httpapi.WriteJSON(w, r, http.StatusCreated, res)
 }
 
 // wrongLoginCode answers a wrong code entered to log in or reset a

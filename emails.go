@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -354,7 +355,20 @@ func (a *Auth) sendNotice(to string, tmpl func(EmailData) (string, string, strin
 
 func (a *Auth) send(to string, tmpl func(EmailData) (string, string, string), d EmailData, key uuid.UUID) {
 	subject, text, html := tmpl(d)
-	a.sender.Send(mail.Message{To: to, Subject: subject, Text: text, HTML: html, IdempotencyKey: key.String()})
+	a.sender.Send(mail.Message{To: to, Subject: oneLine(subject), Text: text, HTML: html, IdempotencyKey: key.String()})
+}
+
+// oneLine replaces control characters, such as line breaks, with spaces.
+// Subjects can include text users chose, like an organization's name, and
+// a line break in a subject could add headers with a Mailer that writes
+// them itself.
+func oneLine(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, s)
 }
 
 // parseAppURL checks Config.AppURL: an absolute https URL (or http on

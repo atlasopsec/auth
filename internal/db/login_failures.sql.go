@@ -38,23 +38,40 @@ func (q *Queries) DeleteOldLoginFailures(ctx context.Context, arg DeleteOldLogin
 	return result.RowsAffected(), nil
 }
 
-const getLoginWaits = `-- name: GetLoginWaits :many
-SELECT next_allowed_at FROM auth.login_failures WHERE key = ANY ($1::text[])
+const getLoginFailuresForUpdate = `-- name: GetLoginFailuresForUpdate :many
+SELECT key, failures, last_failed_at, next_allowed_at FROM auth.login_failures
+WHERE key = ANY ($1::text[])
+ORDER BY key
+FOR UPDATE
 `
 
-func (q *Queries) GetLoginWaits(ctx context.Context, keys []string) ([]time.Time, error) {
-	rows, err := q.db.Query(ctx, getLoginWaits, keys)
+type GetLoginFailuresForUpdateRow struct {
+	Key           string
+	Failures      int32
+	LastFailedAt  time.Time
+	NextAllowedAt time.Time
+}
+
+// Locks the rows for @keys, in key order so concurrent logins can't
+// deadlock.
+func (q *Queries) GetLoginFailuresForUpdate(ctx context.Context, keys []string) ([]GetLoginFailuresForUpdateRow, error) {
+	rows, err := q.db.Query(ctx, getLoginFailuresForUpdate, keys)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []time.Time
+	var items []GetLoginFailuresForUpdateRow
 	for rows.Next() {
-		var next_allowed_at time.Time
-		if err := rows.Scan(&next_allowed_at); err != nil {
+		var i GetLoginFailuresForUpdateRow
+		if err := rows.Scan(
+			&i.Key,
+			&i.Failures,
+			&i.LastFailedAt,
+			&i.NextAllowedAt,
+		); err != nil {
 			return nil, err
 		}
-		items = append(items, next_allowed_at)
+		items = append(items, i)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -91,6 +108,31 @@ func (q *Queries) RecordLoginFailure(ctx context.Context, arg RecordLoginFailure
 	var failures int32
 	err := row.Scan(&failures)
 	return failures, err
+}
+
+const setLoginFailure = `-- name: SetLoginFailure :exec
+UPDATE auth.login_failures
+SET failures = $1, last_failed_at = $2, next_allowed_at = $3, updated_at = $4
+WHERE key = $5
+`
+
+type SetLoginFailureParams struct {
+	Failures      int32
+	LastFailedAt  time.Time
+	NextAllowedAt time.Time
+	Now           time.Time
+	Key           string
+}
+
+func (q *Queries) SetLoginFailure(ctx context.Context, arg SetLoginFailureParams) error {
+	_, err := q.db.Exec(ctx, setLoginFailure,
+		arg.Failures,
+		arg.LastFailedAt,
+		arg.NextAllowedAt,
+		arg.Now,
+		arg.Key,
+	)
+	return err
 }
 
 const setLoginNextAllowed = `-- name: SetLoginNextAllowed :exec

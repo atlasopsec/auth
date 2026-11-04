@@ -10,10 +10,10 @@ import (
 	"github.com/atlasopsec/auth/internal/db"
 )
 
-// Cleanup deletes what has expired: sessions, email links, 2FA challenges
-// and old wrong-code records, OAuth flows, used Apple sign-in nonces,
-// ended rate-limit windows and login delays, and security events over a
-// year old. Apart from the events, they're already refused, so this only
+// Cleanup deletes what has expired: sessions, email links, accepted and
+// expired invitations, 2FA challenges and old wrong-code records, OAuth
+// flows, used Apple sign-in nonces, ended rate-limit windows and login
+// delays, and security events over a year old. Apart from the events, they're already refused, so this only
 // frees space.
 //
 // A background job runs it every hour, unless Config.DisableCleanup is
@@ -28,6 +28,7 @@ func (a *Auth) Cleanup(ctx context.Context) error {
 	}{
 		{"sessions", func() (int64, error) { return a.sessions.DeleteExpired(ctx) }},
 		{"email tokens", func() (int64, error) { return a.tokens.DeleteSpent(ctx) }},
+		{"invitations", func() (int64, error) { return a.q.DeleteEndedInvitations(ctx, now) }},
 		{"2FA challenges", func() (int64, error) {
 			return a.q.DeleteEndedTwoFactorChallenges(ctx, db.DeleteEndedTwoFactorChallengesParams{Now: now, MaxFailedAttempts: maxChallengeAttempts})
 		}},

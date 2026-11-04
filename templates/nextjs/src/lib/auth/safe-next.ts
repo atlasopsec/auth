@@ -1,4 +1,4 @@
-// From the auth module's Next.js template (github.com/atlasopsec/auth, templates/nextjs), version 0.4.0.
+// From the auth module's Next.js template (github.com/atlasopsec/auth, templates/nextjs), version 0.5.0.
 // The page to go to after logging in when there's no "next".
 export const DEFAULT_AFTER_LOGIN = "/dashboard";
 
@@ -19,6 +19,11 @@ export function safeNext(next: unknown): string | null {
   // Browsers read "//evil.example" and "/\evil.example" as other sites,
   // and so does URL.
   if (url.origin !== BASE) {
+    return null;
+  }
+  // Resolving dot segments can leave a path that starts with "//", as
+  // "/.//evil.example" does, which a browser would read as another site.
+  if (url.pathname.startsWith("//")) {
     return null;
   }
   return url.pathname + url.search + url.hash;

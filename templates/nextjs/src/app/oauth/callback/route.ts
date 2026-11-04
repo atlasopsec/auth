@@ -1,4 +1,4 @@
-// From the auth module's Next.js template (github.com/atlasopsec/auth, templates/nextjs), version 0.4.0.
+// From the auth module's Next.js template (github.com/atlasopsec/auth, templates/nextjs), version 0.5.0.
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import type { NextRequest } from "next/server";
@@ -80,6 +80,8 @@ function failure(e: unknown): Notice {
         return "oauth-email-not-verified";
       case "sign_up_not_allowed":
         return "sign-up-not-allowed";
+      case "oauth_link_required":
+        return "oauth-link-required";
       case "oauth_account_in_use":
         return "oauth-account-in-use";
       case "oauth_already_linked":

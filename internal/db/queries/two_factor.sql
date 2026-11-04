@@ -47,6 +47,9 @@ WHERE user_id = @user_id
 INSERT INTO auth.two_factor_challenges (id, user_id, token_hash, client, expires_at, created_at, updated_at)
 VALUES (@id, @user_id, @token_hash, @client, @expires_at, @now, @now);
 
+-- name: GetTwoFactorChallengeUser :one
+SELECT user_id FROM auth.two_factor_challenges WHERE token_hash = @token_hash;
+
 -- Locks the challenge, so concurrent requests count wrong codes and use it
 -- one at a time.
 -- name: GetTwoFactorChallengeForUpdate :one
@@ -64,17 +67,20 @@ UPDATE auth.two_factor_challenges SET used_at = @now, updated_at = @now WHERE id
 DELETE FROM auth.two_factor_challenges WHERE user_id = @user_id;
 
 -- name: CreateTwoFactorFailure :exec
-INSERT INTO auth.two_factor_failures (id, user_id, created_at, updated_at)
-VALUES (@id, @user_id, @now, @now);
+INSERT INTO auth.two_factor_failures (id, user_id, device_key, created_at, updated_at)
+VALUES (@id, @user_id, sqlc.narg('device_key'), @now, @now);
 
 -- name: DeleteOldTwoFactorFailures :exec
 DELETE FROM auth.two_factor_failures WHERE user_id = @user_id AND created_at <= @since;
 
 -- Returns the time of the user's nth most recent wrong code since @since
 -- (counting from 0), if there are that many.
+-- Counts within one scope: a device's own failures, or the account-wide
+-- ones when device_key is NULL.
 -- name: NthRecentTwoFactorFailure :one
 SELECT created_at FROM auth.two_factor_failures
 WHERE user_id = @user_id AND created_at > @since
+  AND device_key IS NOT DISTINCT FROM sqlc.narg('device_key')::text
 ORDER BY created_at DESC
 OFFSET @n LIMIT 1;
 

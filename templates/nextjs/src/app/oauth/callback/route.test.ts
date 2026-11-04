@@ -104,6 +104,18 @@ describe("GET /oauth/callback", () => {
     expect(await callback()).toBe(`/login?notice=${notice}`);
   });
 
+  // The provider's email is an existing account's, and the provider doesn't
+  // run its mailbox, so the user logs in and links it from settings.
+  it("explains oauth_link_required on the login page", async () => {
+    completes(() =>
+      HttpResponse.json(apiError("oauth_link_required", "Text."), {
+        status: 409,
+      }),
+    );
+    started();
+    expect(await callback()).toBe("/login?notice=oauth-link-required");
+  });
+
   it("logs unexpected failures without showing them", async () => {
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
     completes(() => HttpResponse.json({ not: "a login" }, { status: 201 }));

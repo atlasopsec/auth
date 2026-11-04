@@ -4,14 +4,15 @@ The web half of [`github.com/atlasopsec/auth`](../../README.md): the session coo
 
 It's a complete Next.js app so it can be run and tested, but projects **copy parts of it** into their own app rather than starting from it.
 
-**Template version 0.4.0**, for the auth module's `v1.0.0` and later. What changed between versions is in [CHANGELOG.md](CHANGELOG.md). Each copied file starts with a comment naming the version it came from.
+**Template version 0.5.0**, for the auth module's `v1.5.0` and later. What changed between versions is in [CHANGELOG.md](CHANGELOG.md). Each copied file starts with a comment naming the version it came from.
 
 ## What to copy
 
 | Path                                       | What it is                                                                                                                                                              |
 | ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/proxy.ts`                             | Sends logged-out visitors to `/login` before a protected page renders. Add your protected paths to its `matcher`                                                        |
+| `src/proxy.ts`, `src/lib/csp.ts`           | Sends logged-out visitors to `/login` before a protected page renders, and sets the Content Security Policy. Add your protected paths to its `PROTECTED` list           |
 | `src/lib/env.ts`, `src/instrumentation.ts` | The settings below, checked when the server starts                                                                                                                      |
+| `src/lib/security-headers.ts`              | The security headers from the standard, sent on every response by `headers()` in `next.config.ts`. Copy that too                                                        |
 | `src/lib/api/`                             | The Go API client. It forwards the browser's IP and user agent, and checks responses with Zod                                                                           |
 | `src/lib/auth/`                            | Cookies, `getSession` and `requireSession`, the server actions, and the safe `next` check                                                                               |
 | `src/components/auth/`                     | The forms. Restyle them freely                                                                                                                                          |
@@ -35,7 +36,7 @@ export default async function InvoicesPage() {
 }
 ```
 
-With Cache Components on (the default for new Next.js apps), reading the session needs a `<Suspense>` boundary: give the route a `loading.tsx`, as `src/app/dashboard/` does.
+Cache Components are off, since the Content Security Policy needs every page rendered per request (see below). A `loading.tsx`, as `src/app/dashboard/` has, still shows something while the session is checked.
 
 Calls to your own Go API endpoints pass the session token:
 
@@ -81,16 +82,17 @@ Without an edge that overwrites the header on every request, such as behind a pl
 
 ## Content Security Policy
 
-The template doesn't set a Content Security Policy yet. The [security standard](https://github.com/jakefrenzel/engineering-standards/blob/main/standards/security.md#2-security-headers) asks for a nonce-based one, set in `proxy.ts` with a new nonce per request, and that doesn't work with the template's `cacheComponents` and `partialPrefetching` settings. Those serve a static shell built ahead of time, and a script built ahead of time can't carry a nonce made per request, so the browser refuses to run it. The [Next.js CSP guide](https://nextjs.org/docs/app/guides/content-security-policy#static-vs-dynamic-rendering-with-csp) says the same: nonces need every page rendered per request, and partial prerendering is incompatible with them.
+`src/proxy.ts` sets the [security standard](https://github.com/jakefrenzel/engineering-standards/blob/main/standards/security.md#2-security-headers)'s nonce-based Content Security Policy on every page, built in `src/lib/csp.ts`. Each response gets a new nonce, and only scripts carrying it run, so a script someone manages to inject doesn't. The proxy also sets the policy on the request, which is how Next.js finds the nonce to put on its own scripts. `e2e/security.spec.ts` checks every script carries it and nothing is blocked.
 
-To add the policy, as a project that uses this template has done:
+What that takes, if you copy it into an existing app:
 
-1. In `next.config.ts`, remove `cacheComponents` and `partialPrefetching`.
-2. In the root layout, add `export const dynamic = "force-dynamic";`, so every page is rendered per request.
-3. Make `proxy.ts` run on every page, except `_next/static`, `_next/image`, and prefetches, as in the Next.js guide. Keep the logged-out redirect for the protected paths only. On each request, make a nonce from `crypto.randomUUID()`, build the policy from the standard's starting point, and set it on both the request (so Next.js puts the nonce on its scripts) and the response.
-4. If the sign-in buttons are on, add the providers' sign-in origins to `form-action` (`https://accounts.google.com`, `https://github.com`): the button's form ends in a redirect there, and `form-action` covers that redirect too.
+- **Every page is rendered per request** (`export const dynamic = "force-dynamic"` in the root layout), and `next.config.ts` doesn't turn on `cacheComponents` or `partialPrefetching`. Those serve pages built ahead of time, and a script built ahead of time can't carry a nonce made per request, so the browser would refuse to run it. The [Next.js CSP guide](https://nextjs.org/docs/app/guides/content-security-policy#static-vs-dynamic-rendering-with-csp) says the same. It costs some speed.
+- **The proxy runs on every page,** except Next.js's own files under `/_next/` and prefetches. The logged-out redirect still applies only to the paths in its `PROTECTED` list.
+- **`form-action` allows the sign-in providers** in `OAUTH_PROVIDERS` (`https://accounts.google.com`, `https://github.com`): the sign-in button's form ends in a redirect there, and `form-action` covers that redirect too.
+- **Loosen the policy only for a specific need, with a comment saying why,** as the standard says: for example, add your file storage's host to `img-src`. Never add `'unsafe-eval'` or `'unsafe-inline'` to `script-src`.
+- **In `pnpm dev`, React logs that it can't use `eval()`.** React's development build uses it for debugging extras, such as call stacks from the server; the pages still work. Production builds never use it. The policy doesn't allow it in development either, since the standard forbids `'unsafe-eval'`.
 
-Check it in a production build (`pnpm build && pnpm start`): every `<script>` tag on a page should carry the response's nonce. Pages are then rendered on every request, which costs some speed.
+`src/lib/security-headers.ts` still sends the parts of the policy that need no nonce (`frame-ancestors 'none'; object-src 'none'; base-uri 'self'`) from `next.config.ts`, for responses the proxy doesn't run on. A browser applies both policies, so they don't conflict.
 
 ## Running it
 

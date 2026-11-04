@@ -197,6 +197,35 @@ describe("verifyTwoFactor", () => {
     );
   });
 
+  it("sends the device token, and keeps the one that comes back", async () => {
+    let body: unknown;
+    apiServer.use(
+      http.post(
+        `${API}/v1/two-factor-challenges/verify`,
+        async ({ request }) => {
+          body = await request.json();
+          return HttpResponse.json(
+            { ...testLogin("new-token"), device_token: "known-device" },
+            { status: 201 },
+          );
+        },
+      ),
+    );
+    fakeRequest.cookies.set(TWO_FACTOR_COOKIE, "challenge-token");
+    fakeRequest.cookies.set(DEVICE_COOKIE, "device-token");
+
+    await redirectOf(() => verifyTwoFactor({}, form({ code: "123456" })));
+
+    expect(body).toEqual({
+      challenge_token: "challenge-token",
+      code: "123456",
+      device_token: "device-token",
+    });
+    expect(fakeRequest.setCookies.get(DEVICE_COOKIE)?.value).toBe(
+      "known-device",
+    );
+  });
+
   it("shows a wrong code next to the field, and keeps the challenge", async () => {
     apiServer.use(
       http.post(`${API}/v1/two-factor-challenges/verify`, () =>

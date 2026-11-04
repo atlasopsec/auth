@@ -245,7 +245,7 @@ With `AllowUnverifiedLogin`, an attacker can sign up with someone else's email a
 }
 ```
 
-Most recently used first. `next_cursor` is always `null`: a user has a handful of sessions, so this list isn't paginated, but it keeps the standard list shape in case that ever changes.
+Most recently used first, at most 100. `next_cursor` is always `null`: a user has a handful of sessions, so this list isn't paginated, but it keeps the standard list shape in case that ever changes. Someone with more than 100, such as from a script logging in again and again, sees the 100 most recently used.
 
 ### `DELETE /v1/sessions/current`, `/v1/sessions/{id}`, `/v1/sessions`
 
@@ -352,7 +352,7 @@ type Message struct {
 Endpoints that send email respond first and send afterwards, in a background goroutine with up to 3 retries.
 
 - **No timing leak:** "send a reset link" takes the same time whether or not the account exists. Sending synchronously would make real accounts noticeably slower (Resend takes 200–500 ms).
-- **The link is made in the background too:** `POST /v1/password-resets` and `POST /v1/email-verifications` look the account up and create its token after responding, since those are extra database round trips an unknown address doesn't make. A database error there is logged instead of returning `500`. `Close` waits for this work before closing the sender.
+- **The link is made in the background too:** `POST /v1/password-resets`, `POST /v1/email-verifications`, and `POST /v1/email-changes` look the account up and create its token after responding, since those are extra database round trips an unknown address doesn't make. A database error there is logged instead of returning `500`. `Close` waits for this work before closing the sender.
 - **Why not an outbox table** (store emails in Postgres, send from a worker): the emails contain live tokens, so the table would hold working reset links in plain text, which is exactly what hashing tokens avoids.
 - **Trade-off:** an email in flight when the server stops is lost, and the user clicks "resend". `Close` keeps that window small on a normal deploy.
 
@@ -475,7 +475,7 @@ POST /v1/email-verifications/confirm
 The standard requires verifying the new address and notifying the old one, so this is part of step 4.
 
 1. `POST /v1/email-changes` with `{ "email": "new@example.com", "current_password": "…" }`. The account must already be verified.
-   - Returns `202`, even if the new address belongs to another account. In that case the new address gets the "someone tried to sign up" email instead, so this endpoint can't be used to find accounts.
+   - Returns `202`, even if the new address belongs to another account. In that case the new address gets the "someone tried to sign up" email instead, so this endpoint can't be used to find accounts. Whether it's taken is looked up after responding, so the timing doesn't show it either.
 2. The new address gets a link. `POST /v1/email-changes/confirm` with `{ "token": "…" }`:
    - switches the email,
    - **ends all sessions**,
@@ -767,7 +767,7 @@ POST /v1/sessions  →  200
 
 ```json
 POST /v1/two-factor-challenges/verify
-{ "challenge_token": "q3J…", "code": "123456" }
+{ "challenge_token": "q3J…", "code": "123456", "device_token": "…" }
 → 201, the usual login response
 ```
 
@@ -813,6 +813,13 @@ Rate limiting arrives in step 8. Until then, someone who already has the passwor
 
 - **The limit:** after **10 wrong codes in 15 minutes** across all of a user's challenges and password resets, logging in for that user stops issuing challenges until the 15 minutes pass (`429 rate_limited`, with `Retry-After`). Codes sent to challenges started earlier, and to password resets, get the same `429`, so challenges opened ahead of time can't be used to keep guessing.
 - **It's a temporary pause, not a lockout,** in line with the standard's "slow down, don't lock out".
+- **Devices where a code was entered before have a limit of their own (Decision).** Otherwise anyone with the password could send 10 wrong codes every 15 minutes and keep the owner from ever logging in, as the account-wide login delay could before device tokens (§10).
+  - **The 2FA step takes the `device_token`** from the challenge (`POST /v1/two-factor-challenges/verify` with `device_token`). With a right code, the response has a new device token that records a code was entered on this device. Clients keep it in place of the old one, as for any login.
+  - **Wrong codes sent with such a token** count only toward that device's own limit: 10 in 15 minutes, as for the account. They don't pause anyone else, and others' wrong codes don't pause it.
+  - **A device token from the password alone doesn't count.** The challenge response has one, so someone who has the password gets one too; if it had its own limit, each login would give them 10 more guesses. Their wrong codes stay on the account-wide count.
+  - **A device keeps its ID** from one login to the next, in every new token, so logging in again doesn't start its count over.
+  - **Password resets and the logged-in 2FA settings** stay on the account-wide count: a reset doesn't send a device token, and someone logged in can wait out the 15 minutes.
+  - **Stored in `two_factor_failures.device_key`** (migration `00013`), `NULL` for the account-wide count. Device tokens issued before this have no 2FA record, and work as tokens from the password alone.
 - **Every endpoint that takes a code counts toward it,** including confirming setup, turning 2FA off, and regenerating recovery codes, where a wrong code is `422 validation_failed` with `code: incorrect`. Otherwise a stolen session could guess codes there without limit.
 - **The user is emailed when it trips:** "someone entered your password correctly but not your 2FA code; change your password". By then someone has their password.
 
@@ -972,7 +979,7 @@ POST /v1/apple-sign-ins
 - **Each nonce signs in once:** its SHA-256 is recorded in `auth.used_apple_nonces` until the token expires, and a token whose nonce is already recorded is refused with `401 oauth_failed`. So a token and nonce captured from a request (from a log, say) can't be sent again. The nonce is spent before the sign-in, so two requests with it can't both get in; if the sign-in then fails, the app shows the Apple sheet again for a new token. The app must make a new nonce for every sign-in. Tokens that fail a check don't spend their nonce.
 - **The session is always a `mobile` one,** so the body has no `client`.
 - **Apple is iOS only: no web or Android sign-in** (confirmed in review on 2026-10-29). Apple's sign-in API doesn't document PKCE, which the auth standard requires, and Apple only requires its sign-in on iOS. Someone who signed up with Apple on an iPhone uses a password on the web: a password reset sends them a link, through Apple's relay if they hid their address.
-- **Linking Apple from settings isn't offered.** A first Apple sign-in links by verified email like any provider; with Hide My Email the address won't match, so it makes a new account. Unlinking Apple works as for any provider.
+- **Linking Apple from settings isn't offered.** A first Apple sign-in links to an existing account by email only for an iCloud or Hide My Email address (see below); with Hide My Email the address won't match, so it makes a new account. An Apple ID at another address that an account already uses gets `409 oauth_link_required`, and since Apple can't be linked from settings, that user keeps logging in the way they did. Unlinking Apple works as for any provider.
 - **Checking signed tokens needs a JWT library.** Google's and Apple's ID tokens from the redirect flow are checked the same way. I'd use `github.com/coreos/go-oidc/v3`, the standard Go OpenID Connect library, rather than write signature checking ourselves. It's the one new dependency besides `golang.org/x/oauth2` (planned in design.md).
 
 ### Who gets logged in (Decision)
@@ -984,9 +991,16 @@ When a provider confirms who the user is:
    - **GitHub:** the primary email from `/user/emails`, if it's marked verified.
    - **Not verified:** refused with `403 oauth_email_not_verified` ("Verify your email with Google first"). Nothing is created.
 3. **An existing account with that email:**
+   - **Only if the provider runs that email's mailbox (Decision).** "Verified" proves the user can read the address now only where the provider controls it; elsewhere it may be years old. A work address stays verified at Google or GitHub after it's given to someone else, and whoever had it before could otherwise sign in to the new holder's account. The provider runs the mailbox for:
+     - **Google:** `@gmail.com` addresses, and Google Workspace accounts (the ID token has `hd`), as Google's own guidance says.
+     - **Apple:** Hide My Email relay addresses (`is_private_email`) and iCloud Mail (`@icloud.com`, `@me.com`, `@mac.com`).
+     - **GitHub:** never; it runs nobody's mailbox.
+
+     For any other address, nothing changes and the answer is `409 oauth_link_required`: the user logs in the way they usually do and links the provider from settings, which proves they own the account. That includes an account whose email isn't verified, which isn't taken back. The `409` shows that an account uses the address, but only to someone whose provider shows that address as verified, who would have been logged in before this rule.
    - **If its email is verified,** the provider is linked to it and the user is logged in. That's the same trust as a password reset link to that inbox.
+   - **If it already has another account with this provider linked,** such as a second GitHub account with the same verified address, nothing changes and the answer is `401 oauth_failed`. A user has one account per provider, and the one linked isn't replaced.
    - **If its email isn't verified,** this is §2's pre-hijacking case: someone may have signed up with this address first. Its password, sessions, 2FA, pending email tokens, and linked providers are deleted. Then the email is marked verified, the provider is linked, and the real owner is logged in. A password reset takes back such an account the same way.
-4. **No account** → a new user with that email, already verified, with no password. `OnUserCreated` runs, as for any sign-up. If it returns `ErrSignUpNotAllowed`, nothing is created and the answer is `403 sign_up_not_allowed`. The provider has already shown that the user owns the address, so this reveals nothing to anyone else.
+4. **No account** → from any provider-verified email, owned by the provider or not, since there's nobody to take over: a new user with that email, already verified, with no password. `OnUserCreated` runs, as for any sign-up. If it returns `ErrSignUpNotAllowed`, nothing is created and the answer is `403 sign_up_not_allowed`. The provider has already shown that the user owns the address, so this reveals nothing to anyone else.
 
 Then, like every other way in:
 - **2FA applies:** a user with 2FA gets a challenge, not a session.
@@ -1048,6 +1062,7 @@ auth.used_apple_nonces  id, nonce_hash, expires_at, created_at, updated_at
 | `oauth_failed` | 401 | The flow is unknown, used, or expired; the client verifier doesn't match; or the provider refused the code or token. Already listed in design.md |
 | `oauth_email_not_verified` | 403 | The provider doesn't vouch for the email, and no account is linked yet |
 | `sign_up_not_allowed` | 403 | No account is linked yet, and `OnUserCreated` refused the sign-up with `ErrSignUpNotAllowed` |
+| `oauth_link_required` | 409 | Signing in with a provider whose email an existing account uses, at a provider that doesn't run that email's mailbox. Log in and link it from settings |
 | `oauth_account_in_use` | 409 | Linking a provider account that belongs to another user |
 | `oauth_already_linked` | 409 | Linking a second account with a provider the user already linked (one per provider) |
 | `last_login_method` | 409 | Unlinking the only way left to log in |
@@ -1146,11 +1161,11 @@ The standard: "slow down further attempts (growing delays) instead of locking th
 - **Devices that have logged in before skip the per-account delays (Decision).** Without this, anyone could keep the per-account delay running with a wrong password every 15 minutes from a few IPs, and the owner could never log in with their password: a lockout in all but name. So a correct password returns a `device_token`, in the session and in the 2FA challenge, which the client keeps (an `HttpOnly` `__Host-device` cookie on the web, secure storage on mobile) and sends with its next login as `device_token`:
   - **With a valid token for that email,** the per-account count is replaced by the token's own: the same delays after **5 wrong passwords sent with that token**, from any IP. So a stolen token can't be used to guess faster than one IP can, and other people's failures don't slow the device down. The per-account-and-IP count still applies.
   - **The token** is sealed with `Config.EncryptionKey` (AES-256-GCM, as for 2FA secrets), bound to the hashed email, and holds when it was issued and a random ID that names its count. It works for **a year**, and every login with the password issues a new one. Nothing is stored, so there's no migration, and it can't be revoked; it doesn't need to be, since it lets nobody in by itself. Changing the email or the encryption key makes old tokens ignored.
-  - **Missing, expired, tampered, or another email's tokens are ignored,** and the login is held to the per-account count as before. Other ways to log in answer `device_token: null`.
+  - **Missing, expired, tampered, or another email's tokens are ignored,** and the login is held to the per-account count as before. Other ways to log in answer `device_token: null`, except the 2FA step after a password login, which answers with a new token when it was sent one (§8).
   - **Mobile apps** should keep the token in `expo-secure-store` with the session token, and send it with every password login.
 - **Counts start over after an hour without failures** for that key. The exact schedule: no wait after the first 5 failures (20 per account); after the next failure 1 second, then 2, 4, and so on, capped at 15 minutes.
 - **Stored in `auth.login_failures`** (migration `00009`), one row per key with its count and the time the next attempt is allowed. Emails appear only as hashes. The cleanup job deletes rows an hour after their last failure, once their wait is over.
-- **Concurrent attempts** that arrive in the same instant can each be checked before either failure is counted. The per-IP login limit (30 per 10 minutes) bounds that.
+- **Each attempt is counted before its password is checked,** under a lock on its keys' rows, and a correct password takes it back out again. So attempts sent at once, even from many IPs, can't all be checked before any is counted: once a key passes its threshold, only one attempt is checked and the rest wait. A correct password's attempt is removed from the per-account count, so it doesn't add to the failures others have sent; the per-account-and-IP and device token counts are cleared, as above.
 
 ### The event log (Decision)
 
@@ -1189,7 +1204,7 @@ The standard says users SHOULD be emailed about logins from a new device.
 
 ### Cleanup (Decision)
 
-Expired sessions, email tokens, 2FA challenges, OAuth flows, old rate-limit windows, and events over a year old all pile up today.
+Expired sessions, email tokens, accepted and expired invitations, 2FA challenges, OAuth flows, old rate-limit windows, and events over a year old all pile up today. Invitations also hold the invited address, which isn't kept once the invitation is used or has expired.
 
 - **A background job,** started by `New` and stopped by `Close` like the email sender, deletes them **once an hour**. It first runs 5 minutes after start, so a deploy doesn't set every instance off at once.
 - **Several API instances** each run it, which is harmless, since the deletes don't conflict.
@@ -1197,7 +1212,7 @@ Expired sessions, email tokens, 2FA challenges, OAuth flows, old rate-limit wind
 
 ### Database
 
-Migration `00008` (PR 1): `auth.rate_limits`, with an `expires_at` column (the window's end) for cleanup, plus the `id`, `created_at`, and `updated_at` every table has. Migration `00010` (PR 3): `auth.auth_events`, with indexes on `(user_id, created_at)` and `(created_at)`. `user_id` and `actor_id` become `NULL` when the user is deleted, so the record of what happened stays.
+Migration `00008` (PR 1): `auth.rate_limits`, with an `expires_at` column (the window's end) for cleanup, plus the `id`, `created_at`, and `updated_at` every table has. Migration `00010` (PR 3): `auth.auth_events`, with indexes on `(user_id, created_at)` and `(created_at)`. `user_id` and `actor_id` become `NULL` when the user is deleted, so the record of what happened stays. Migration `00012` adds an index on `actor_id` (with ones on `auth.invitations (organization_id)` and `auth.oauth_flows (user_id)`), so deleting a user doesn't read every event to find the ones they made. It builds them with `CREATE INDEX CONCURRENTLY`, outside a transaction. `Migrate` runs migrations on connections of its own, made from the pool's settings and closed afterwards, so a migration's `SET lock_timeout`, which outlasts its transaction, never reaches the project's pool.
 
 ### New error codes
 
