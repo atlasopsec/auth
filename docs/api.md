@@ -767,7 +767,7 @@ POST /v1/sessions  →  200
 
 ```json
 POST /v1/two-factor-challenges/verify
-{ "challenge_token": "q3J…", "code": "123456" }
+{ "challenge_token": "q3J…", "code": "123456", "device_token": "…" }
 → 201, the usual login response
 ```
 
@@ -813,6 +813,13 @@ Rate limiting arrives in step 8. Until then, someone who already has the passwor
 
 - **The limit:** after **10 wrong codes in 15 minutes** across all of a user's challenges and password resets, logging in for that user stops issuing challenges until the 15 minutes pass (`429 rate_limited`, with `Retry-After`). Codes sent to challenges started earlier, and to password resets, get the same `429`, so challenges opened ahead of time can't be used to keep guessing.
 - **It's a temporary pause, not a lockout,** in line with the standard's "slow down, don't lock out".
+- **Devices where a code was entered before have a limit of their own (Decision).** Otherwise anyone with the password could send 10 wrong codes every 15 minutes and keep the owner from ever logging in, as the account-wide login delay could before device tokens (§10).
+  - **The 2FA step takes the `device_token`** from the challenge (`POST /v1/two-factor-challenges/verify` with `device_token`). With a right code, the response has a new device token that records a code was entered on this device. Clients keep it in place of the old one, as for any login.
+  - **Wrong codes sent with such a token** count only toward that device's own limit: 10 in 15 minutes, as for the account. They don't pause anyone else, and others' wrong codes don't pause it.
+  - **A device token from the password alone doesn't count.** The challenge response has one, so someone who has the password gets one too; if it had its own limit, each login would give them 10 more guesses. Their wrong codes stay on the account-wide count.
+  - **A device keeps its ID** from one login to the next, in every new token, so logging in again doesn't start its count over.
+  - **Password resets and the logged-in 2FA settings** stay on the account-wide count: a reset doesn't send a device token, and someone logged in can wait out the 15 minutes.
+  - **Stored in `two_factor_failures.device_key`** (migration `00013`), `NULL` for the account-wide count. Device tokens issued before this have no 2FA record, and work as tokens from the password alone.
 - **Every endpoint that takes a code counts toward it,** including confirming setup, turning 2FA off, and regenerating recovery codes, where a wrong code is `422 validation_failed` with `code: incorrect`. Otherwise a stolen session could guess codes there without limit.
 - **The user is emailed when it trips:** "someone entered your password correctly but not your 2FA code; change your password". By then someone has their password.
 
@@ -1154,7 +1161,7 @@ The standard: "slow down further attempts (growing delays) instead of locking th
 - **Devices that have logged in before skip the per-account delays (Decision).** Without this, anyone could keep the per-account delay running with a wrong password every 15 minutes from a few IPs, and the owner could never log in with their password: a lockout in all but name. So a correct password returns a `device_token`, in the session and in the 2FA challenge, which the client keeps (an `HttpOnly` `__Host-device` cookie on the web, secure storage on mobile) and sends with its next login as `device_token`:
   - **With a valid token for that email,** the per-account count is replaced by the token's own: the same delays after **5 wrong passwords sent with that token**, from any IP. So a stolen token can't be used to guess faster than one IP can, and other people's failures don't slow the device down. The per-account-and-IP count still applies.
   - **The token** is sealed with `Config.EncryptionKey` (AES-256-GCM, as for 2FA secrets), bound to the hashed email, and holds when it was issued and a random ID that names its count. It works for **a year**, and every login with the password issues a new one. Nothing is stored, so there's no migration, and it can't be revoked; it doesn't need to be, since it lets nobody in by itself. Changing the email or the encryption key makes old tokens ignored.
-  - **Missing, expired, tampered, or another email's tokens are ignored,** and the login is held to the per-account count as before. Other ways to log in answer `device_token: null`.
+  - **Missing, expired, tampered, or another email's tokens are ignored,** and the login is held to the per-account count as before. Other ways to log in answer `device_token: null`, except the 2FA step after a password login, which answers with a new token when it was sent one (§8).
   - **Mobile apps** should keep the token in `expo-secure-store` with the session token, and send it with every password login.
 - **Counts start over after an hour without failures** for that key. The exact schedule: no wait after the first 5 failures (20 per account); after the next failure 1 second, then 2, 4, and so on, capped at 15 minutes.
 - **Stored in `auth.login_failures`** (migration `00009`), one row per key with its count and the time the next attempt is allowed. Emails appear only as hashes. The cleanup job deletes rows an hour after their last failure, once their wait is over.

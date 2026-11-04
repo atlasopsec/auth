@@ -1147,6 +1147,16 @@ paths:
               properties:
                 challenge_token: { type: string }
                 code: { type: string, description: A TOTP code or a recovery code. }
+                device_token:
+                  type: string
+                  description: >
+                    The `device_token` from the challenge, if the client
+                    keeps it. The response then has a new one that records
+                    a code was entered on this device: keep it in place of
+                    the old one. Wrong codes from a device like that count
+                    toward a guessing limit of its own, so someone else's
+                    can't pause 2FA for it. A missing, expired, or invalid
+                    token is ignored.
       responses:
         "201":
           description: Logged in.
@@ -1342,10 +1352,12 @@ components:
         device_token:
           type: [string, "null"]
           description: &deviceToken >
-            Set after a login with the password: keep it on the device
-            (in an `HttpOnly` cookie on the web, in secure storage on
-            mobile) and send it with the next login. It works for a year
-            and only for this email. `null` for other ways to log in.
+            Set after a login with the password, and after the 2FA step
+            when the request sent one: keep it on the device (in an
+            `HttpOnly` cookie on the web, in secure storage on mobile) in
+            place of any earlier one, and send it with the next login and
+            2FA step. It works for a year and only for this email. `null`
+            for other ways to log in.
 
     OAuthAccount:
       type: object

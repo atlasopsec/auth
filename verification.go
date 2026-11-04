@@ -122,7 +122,7 @@ func (a *Auth) confirmVerification(w http.ResponseWriter, r *http.Request) {
 	if err == nil && twoFactor {
 		// Nothing is spent while the user is at the guessing limit, so the
 		// link still works afterwards.
-		err = a.checkPaused(ctx, a.q, row.ID)
+		err = a.checkPaused(ctx, a.q, row.ID, "")
 	}
 	if err != nil {
 		a.writeLoginCodeError(w, r, err)

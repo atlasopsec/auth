@@ -33,7 +33,23 @@ const migrateLockID int64 = 0x617574686d6967 // "authmig"
 
 // Run creates the auth schema if needed and applies any pending migrations.
 // It's idempotent and safe to call from several instances at once.
-func Run(ctx context.Context, pool *pgxpool.Pool) (err error) {
+func Run(ctx context.Context, pool *pgxpool.Pool) error {
+	return run(ctx, pool, func(p *goose.Provider) error {
+		_, err := p.Up(ctx)
+		return err
+	})
+}
+
+// UpTo is Run, but applies migrations only up to version. It's for tests
+// that need the database as an earlier version left it.
+func UpTo(ctx context.Context, pool *pgxpool.Pool, version int64) error {
+	return run(ctx, pool, func(p *goose.Provider) error {
+		_, err := p.UpTo(ctx, version)
+		return err
+	})
+}
+
+func run(ctx context.Context, pool *pgxpool.Pool, up func(*goose.Provider) error) (err error) {
 	if err := createSchema(ctx, pool); err != nil {
 		return err
 	}
@@ -68,7 +84,7 @@ func Run(ctx context.Context, pool *pgxpool.Pool) (err error) {
 		}
 	}()
 
-	if _, err := provider.Up(ctx); err != nil {
+	if err := up(provider); err != nil {
 		return fmt.Errorf("auth: applying migrations: %w", err)
 	}
 	return nil
