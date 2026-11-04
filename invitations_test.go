@@ -425,3 +425,22 @@ func TestInvitationFromSomeoneRemovedOrDemoted(t *testing.T) {
 		})
 	}
 }
+
+// TestInvitationSubjectIsOneLine checks a line break in an organization's
+// name can't break the invitation email's subject into more headers.
+func TestInvitationSubjectIsOneLine(t *testing.T) {
+	t.Parallel()
+	f := setupOrgs(t, Config{})
+	tm := f.team(t)
+	if res := f.do(t, http.MethodPatch, tm.path(""), `{"name":"Acme\r\nBcc: someone@example.net"}`, withToken(tm.users[OwnerRole].Token)); res.status != http.StatusOK {
+		t.Fatalf("renaming: status %d, body %s", res.status, res.body)
+	}
+	if res := f.invite(t, tm, OwnerRole, invitee, "member"); res.status != http.StatusCreated {
+		t.Fatalf("inviting: status %d, body %s", res.status, res.body)
+	}
+	m := f.emailsTo(invitee)
+	if want := "You're invited to join Acme  Bcc: someone@example.net on Example"; len(m) != 1 || m[0].Subject != want {
+		t.Errorf("invitation emails = %+v, want one with subject %q", m, want)
+	}
+}
+
