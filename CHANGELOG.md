@@ -4,6 +4,16 @@ What changed in each release of `github.com/atlasopsec/auth`. The Next.js templa
 
 The exported Go API and the HTTP endpoints follow [semantic versioning](https://semver.org): a minor release only adds, and anything removed or changed waits for the next major version.
 
+## v1.5.1
+
+### Security
+
+- Upgrade `github.com/jackc/pgx/v5` from v5.11.0 to v5.12.0, which fixes two high-severity vulnerabilities. Projects that import the module get at least this version, which covers their own use of pgx too.
+  - **GHSA-j38q-h3ph-jjpq:** SQL injection in `SendBatch` with the non-default simple protocol, when a queued query ends in a `--` comment and the next has an attacker-controlled string argument.
+  - **GHSA-95fj-3fxw-g62g:** a server impersonating Postgres could skip authentication for connections that rely on `require_auth` or `channel_binding=require` without verifying the server's certificate (`sslmode=verify-full`).
+
+  The module itself uses neither batches nor those settings.
+
 ## v1.5.0
 
 The fixes from a security audit.
