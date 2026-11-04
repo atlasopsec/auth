@@ -43,7 +43,7 @@
     "prettier": "^3.9.10",
     "prettier-plugin-tailwindcss": "^0.8.1",
     "tailwindcss": "^4",
-    "typescript": "^5",
+    "typescript": "^6",
     "vitest": "^5.0.5"
   },
   "packageManager": "pnpm@10.28.0",
