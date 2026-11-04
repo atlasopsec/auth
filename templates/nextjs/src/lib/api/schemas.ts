@@ -10,8 +10,8 @@ export const userSchema = z.object({
 
 export type User = z.infer<typeof userSchema>;
 
-// A device token, from a login with the password. Optional, since API
-// versions before it don't send one.
+// A device token, from a login with the password or the 2FA step after
+// it. Optional, since API versions before it don't send one.
 const deviceTokenSchema = z.string().nullable().optional();
 
 // A new session, from logging in, signing up, or finishing 2FA.

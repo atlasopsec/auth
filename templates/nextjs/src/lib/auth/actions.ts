@@ -96,11 +96,19 @@ export async function verifyTwoFactor(
     };
   }
 
+  // Sent back so the answer's device token records that a code was
+  // entered here. Then someone else's wrong codes can't pause 2FA for this
+  // browser.
+  const deviceToken = store.get(DEVICE_COOKIE)?.value;
   let login;
   try {
     login = await callApi("/v1/two-factor-challenges/verify", loginSchema, {
       method: "POST",
-      body: { challenge_token: challenge, code: parsed.data.code },
+      body: {
+        challenge_token: challenge,
+        code: parsed.data.code,
+        ...(deviceToken ? { device_token: deviceToken } : {}),
+      },
     });
   } catch (e) {
     if (e instanceof ApiError && e.code === "two_factor_challenge_invalid") {
@@ -113,6 +121,9 @@ export async function verifyTwoFactor(
   }
 
   store.set(TWO_FACTOR_COOKIE, "", clearedCookie);
+  if (login.device_token) {
+    store.set(DEVICE_COOKIE, login.device_token, deviceCookieOptions);
+  }
   await startSession(login);
   redirect(safeNext(formData.get("next")) ?? (await afterLogin()));
 }
