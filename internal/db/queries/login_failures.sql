@@ -1,5 +1,10 @@
--- name: GetLoginWaits :many
-SELECT next_allowed_at FROM auth.login_failures WHERE key = ANY (@keys::text[]);
+-- Locks the rows for @keys, in key order so concurrent logins can't
+-- deadlock.
+-- name: GetLoginFailuresForUpdate :many
+SELECT key, failures, last_failed_at, next_allowed_at FROM auth.login_failures
+WHERE key = ANY (@keys::text[])
+ORDER BY key
+FOR UPDATE;
 
 -- Counts one more failure, starting over if the last was before
 -- @reset_before, and returns the count.
@@ -14,6 +19,11 @@ RETURNING failures;
 
 -- name: SetLoginNextAllowed :exec
 UPDATE auth.login_failures SET next_allowed_at = @next_allowed_at, updated_at = @now WHERE key = @key;
+
+-- name: SetLoginFailure :exec
+UPDATE auth.login_failures
+SET failures = @failures, last_failed_at = @last_failed_at, next_allowed_at = @next_allowed_at, updated_at = @now
+WHERE key = @key;
 
 -- name: DeleteLoginFailures :exec
 DELETE FROM auth.login_failures WHERE key = @key;
