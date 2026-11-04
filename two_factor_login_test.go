@@ -583,3 +583,38 @@ func TestTwoFactorLoginKeepsSecretsOutOfLogs(t *testing.T) {
 		}
 	}
 }
+
+// TestVerifyChallengeDuringTwoFactorReset checks a code sent while 2FA is
+// being reset waits for the reset, rather than deadlocking with it: the
+// reset locks the 2FA secret and then deletes the challenges, so finishing
+// a challenge must take its locks in the same order.
+func TestVerifyChallengeDuringTwoFactorReset(t *testing.T) {
+	t.Parallel()
+	f := setup(t, Hooks{})
+	l := f.signUp(t, testEmail)
+	secret, _ := f.enableTwoFactor(t, l.Token)
+	challenge := f.startChallenge(t, testEmail)
+	ctx := context.Background()
+
+	// A reset has locked the secret, as ResetTwoFactor and password resets
+	// do, and hasn't got to the challenges yet.
+	tx, err := f.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM auth.totp_secrets WHERE user_id = $1 FOR UPDATE`, l.User.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	result := make(chan response, 1)
+	go func() { result <- f.verify(t, challenge, f.code(secret)) }()
+	f.waitForLock(t, result)
+	if _, err := tx.Exec(ctx, `DELETE FROM auth.two_factor_challenges WHERE user_id = $1`, l.User.ID); err != nil {
+		t.Fatalf("reset deleting challenges: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	wantError(t, "challenge ended by the reset", <-result, 401, "two_factor_challenge_invalid")
+}

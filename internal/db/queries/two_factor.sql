@@ -47,6 +47,9 @@ WHERE user_id = @user_id
 INSERT INTO auth.two_factor_challenges (id, user_id, token_hash, client, expires_at, created_at, updated_at)
 VALUES (@id, @user_id, @token_hash, @client, @expires_at, @now, @now);
 
+-- name: GetTwoFactorChallengeUser :one
+SELECT user_id FROM auth.two_factor_challenges WHERE token_hash = @token_hash;
+
 -- Locks the challenge, so concurrent requests count wrong codes and use it
 -- one at a time.
 -- name: GetTwoFactorChallengeForUpdate :one
