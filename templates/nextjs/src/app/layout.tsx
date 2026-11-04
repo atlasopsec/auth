@@ -2,6 +2,10 @@ import type { Metadata } from "next";
 
 import "./globals.css";
 
+// Every page is rendered per request, so its scripts carry that
+// response's Content Security Policy nonce (see src/proxy.ts).
+export const dynamic = "force-dynamic";
+
 export const metadata: Metadata = {
   title: "Example",
 };

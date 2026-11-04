@@ -4,8 +4,9 @@ import { securityHeaders } from "./src/lib/security-headers";
 
 const nextConfig: NextConfig = {
   /* config options here */
-  cacheComponents: true,
-  partialPrefetching: true,
+  // No cacheComponents or partialPrefetching: they serve pages built ahead
+  // of time, which can't carry the per-request nonce the Content Security
+  // Policy needs (see src/proxy.ts and the README).
   turbopack: {
     rules: {
       "*.css": {
