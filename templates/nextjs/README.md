@@ -12,6 +12,7 @@ It's a complete Next.js app so it can be run and tested, but projects **copy par
 | ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `src/proxy.ts`                             | Sends logged-out visitors to `/login` before a protected page renders. Add your protected paths to its `matcher`                                                        |
 | `src/lib/env.ts`, `src/instrumentation.ts` | The settings below, checked when the server starts                                                                                                                      |
+| `src/lib/security-headers.ts`              | The security headers from the standard, sent on every response by `headers()` in `next.config.ts`. Copy that too                                                        |
 | `src/lib/api/`                             | The Go API client. It forwards the browser's IP and user agent, and checks responses with Zod                                                                           |
 | `src/lib/auth/`                            | Cookies, `getSession` and `requireSession`, the server actions, and the safe `next` check                                                                               |
 | `src/components/auth/`                     | The forms. Restyle them freely                                                                                                                                          |
@@ -81,14 +82,15 @@ Without an edge that overwrites the header on every request, such as behind a pl
 
 ## Content Security Policy
 
-The template doesn't set a Content Security Policy yet. The [security standard](https://github.com/jakefrenzel/engineering-standards/blob/main/standards/security.md#2-security-headers) asks for a nonce-based one, set in `proxy.ts` with a new nonce per request, and that doesn't work with the template's `cacheComponents` and `partialPrefetching` settings. Those serve a static shell built ahead of time, and a script built ahead of time can't carry a nonce made per request, so the browser refuses to run it. The [Next.js CSP guide](https://nextjs.org/docs/app/guides/content-security-policy#static-vs-dynamic-rendering-with-csp) says the same: nonces need every page rendered per request, and partial prerendering is incompatible with them.
+The template sends the standard's other security headers on every response (`src/lib/security-headers.ts`), and the parts of the Content Security Policy that need no nonce: `frame-ancestors 'none'`, which stops other sites framing the app, `object-src 'none'`, and `base-uri 'self'`. It doesn't set the policy's nonce-based `script-src` yet. The [security standard](https://github.com/jakefrenzel/engineering-standards/blob/main/standards/security.md#2-security-headers) asks for a nonce-based one, set in `proxy.ts` with a new nonce per request, and that doesn't work with the template's `cacheComponents` and `partialPrefetching` settings. Those serve a static shell built ahead of time, and a script built ahead of time can't carry a nonce made per request, so the browser refuses to run it. The [Next.js CSP guide](https://nextjs.org/docs/app/guides/content-security-policy#static-vs-dynamic-rendering-with-csp) says the same: nonces need every page rendered per request, and partial prerendering is incompatible with them.
 
 To add the policy, as a project that uses this template has done:
 
 1. In `next.config.ts`, remove `cacheComponents` and `partialPrefetching`.
 2. In the root layout, add `export const dynamic = "force-dynamic";`, so every page is rendered per request.
-3. Make `proxy.ts` run on every page, except `_next/static`, `_next/image`, and prefetches, as in the Next.js guide. Keep the logged-out redirect for the protected paths only. On each request, make a nonce from `crypto.randomUUID()`, build the policy from the standard's starting point, and set it on both the request (so Next.js puts the nonce on its scripts) and the response.
-4. If the sign-in buttons are on, add the providers' sign-in origins to `form-action` (`https://accounts.google.com`, `https://github.com`): the button's form ends in a redirect there, and `form-action` covers that redirect too.
+3. Remove the `Content-Security-Policy` entry from `src/lib/security-headers.ts`; the full policy includes its directives.
+4. Make `proxy.ts` run on every page, except `_next/static`, `_next/image`, and prefetches, as in the Next.js guide. Keep the logged-out redirect for the protected paths only. On each request, make a nonce from `crypto.randomUUID()`, build the policy from the standard's starting point, and set it on both the request (so Next.js puts the nonce on its scripts) and the response.
+5. If the sign-in buttons are on, add the providers' sign-in origins to `form-action` (`https://accounts.google.com`, `https://github.com`): the button's form ends in a redirect there, and `form-action` covers that redirect too.
 
 Check it in a production build (`pnpm build && pnpm start`): every `<script>` tag on a page should carry the response's nonce. Pages are then rendered on every request, which costs some speed.
 
