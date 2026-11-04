@@ -200,3 +200,43 @@ func TestSendAfterCloseDrops(t *testing.T) {
 		t.Errorf("dropped message wasn't logged:\n%s", logs)
 	}
 }
+
+// panicky panics on its first n sends, then records messages.
+type panicky struct {
+	mailtest.Recorder
+	mu sync.Mutex
+	n  int
+}
+
+func (p *panicky) Send(ctx context.Context, m mail.Message) error {
+	p.mu.Lock()
+	panicNow := p.n > 0
+	p.n--
+	p.mu.Unlock()
+	if panicNow {
+		panic("mailer bug: " + m.Text)
+	}
+	return p.Recorder.Send(ctx, m)
+}
+
+// TestMailerPanicIsAFailedAttempt checks a panicking Mailer doesn't stop
+// the process: the attempt fails, is retried, and the last failure is
+// logged without the panic's value, which here holds the token.
+func TestMailerPanicIsAFailedAttempt(t *testing.T) {
+	t.Parallel()
+	p := &panicky{n: 1}
+	s, _ := newSender(p, 0, 0)
+	s.Send(msg)
+	s.Wait()
+	if diff := cmp.Diff([]mail.Message{msg}, p.Messages()); diff != "" {
+		t.Errorf("sent after the panic (-want +got):\n%s", diff)
+	}
+
+	always := &panicky{n: 3}
+	s, logs := newSender(always, 0, 0)
+	s.Send(msg)
+	s.Wait()
+	if got := logs.String(); !strings.Contains(got, "sending email failed") || strings.Contains(got, "SECRET") {
+		t.Errorf("logs = %q, want the failure logged without the token", got)
+	}
+}

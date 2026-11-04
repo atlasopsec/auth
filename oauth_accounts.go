@@ -110,8 +110,9 @@ func (a *Auth) startLink(w http.ResponseWriter, r *http.Request) {
 }
 
 // sessionUserID returns the user of the request's session, if it has a
-// valid one. Finishing a flow is public, but finishing a link flow needs
-// the session that started it.
+// valid one, with the same 12-hour limit for privileged roles as
+// authenticate. Finishing a flow is public, but finishing a link flow
+// needs the session that started it.
 func (a *Auth) sessionUserID(r *http.Request) *uuid.UUID {
 	tok, ok := bearerToken(r)
 	if !ok {
@@ -119,6 +120,10 @@ func (a *Auth) sessionUserID(r *http.Request) *uuid.UUID {
 	}
 	s, err := a.sessions.Validate(r.Context(), tok)
 	if err != nil {
+		return nil
+	}
+	tf, err := a.twoFactorStatus(r.Context(), s.UserID)
+	if err != nil || a.pastPrivilegedLimit(s, tf) {
 		return nil
 	}
 	return &s.UserID

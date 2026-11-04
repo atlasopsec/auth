@@ -178,10 +178,15 @@ func (m *Manager) Validate(ctx context.Context, tok string) (Session, error) {
 	return fromRow(row), nil
 }
 
+// MaxListed is the most sessions List returns. A user has a handful; one
+// with more, such as from a script logging in again and again, gets the
+// most recently used.
+const MaxListed = 100
+
 // List returns userID's sessions that haven't expired, most recently used
-// first.
+// first, at most MaxListed of them.
 func (m *Manager) List(ctx context.Context, userID uuid.UUID) ([]Session, error) {
-	rows, err := m.q.ListActiveSessions(ctx, db.ListActiveSessionsParams{UserID: userID, Now: m.clock()})
+	rows, err := m.q.ListActiveSessions(ctx, db.ListActiveSessionsParams{UserID: userID, Now: m.clock(), MaxRows: MaxListed})
 	if err != nil {
 		return nil, fmt.Errorf("session: listing: %w", err)
 	}

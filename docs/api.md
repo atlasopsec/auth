@@ -245,7 +245,7 @@ With `AllowUnverifiedLogin`, an attacker can sign up with someone else's email a
 }
 ```
 
-Most recently used first. `next_cursor` is always `null`: a user has a handful of sessions, so this list isn't paginated, but it keeps the standard list shape in case that ever changes.
+Most recently used first, at most 100. `next_cursor` is always `null`: a user has a handful of sessions, so this list isn't paginated, but it keeps the standard list shape in case that ever changes. Someone with more than 100, such as from a script logging in again and again, sees the 100 most recently used.
 
 ### `DELETE /v1/sessions/current`, `/v1/sessions/{id}`, `/v1/sessions`
 
@@ -352,7 +352,7 @@ type Message struct {
 Endpoints that send email respond first and send afterwards, in a background goroutine with up to 3 retries.
 
 - **No timing leak:** "send a reset link" takes the same time whether or not the account exists. Sending synchronously would make real accounts noticeably slower (Resend takes 200–500 ms).
-- **The link is made in the background too:** `POST /v1/password-resets` and `POST /v1/email-verifications` look the account up and create its token after responding, since those are extra database round trips an unknown address doesn't make. A database error there is logged instead of returning `500`. `Close` waits for this work before closing the sender.
+- **The link is made in the background too:** `POST /v1/password-resets`, `POST /v1/email-verifications`, and `POST /v1/email-changes` look the account up and create its token after responding, since those are extra database round trips an unknown address doesn't make. A database error there is logged instead of returning `500`. `Close` waits for this work before closing the sender.
 - **Why not an outbox table** (store emails in Postgres, send from a worker): the emails contain live tokens, so the table would hold working reset links in plain text, which is exactly what hashing tokens avoids.
 - **Trade-off:** an email in flight when the server stops is lost, and the user clicks "resend". `Close` keeps that window small on a normal deploy.
 
@@ -475,7 +475,7 @@ POST /v1/email-verifications/confirm
 The standard requires verifying the new address and notifying the old one, so this is part of step 4.
 
 1. `POST /v1/email-changes` with `{ "email": "new@example.com", "current_password": "…" }`. The account must already be verified.
-   - Returns `202`, even if the new address belongs to another account. In that case the new address gets the "someone tried to sign up" email instead, so this endpoint can't be used to find accounts.
+   - Returns `202`, even if the new address belongs to another account. In that case the new address gets the "someone tried to sign up" email instead, so this endpoint can't be used to find accounts. Whether it's taken is looked up after responding, so the timing doesn't show it either.
 2. The new address gets a link. `POST /v1/email-changes/confirm` with `{ "token": "…" }`:
    - switches the email,
    - **ends all sessions**,
@@ -1190,7 +1190,7 @@ The standard says users SHOULD be emailed about logins from a new device.
 
 ### Cleanup (Decision)
 
-Expired sessions, email tokens, 2FA challenges, OAuth flows, old rate-limit windows, and events over a year old all pile up today.
+Expired sessions, email tokens, accepted and expired invitations, 2FA challenges, OAuth flows, old rate-limit windows, and events over a year old all pile up today. Invitations also hold the invited address, which isn't kept once the invitation is used or has expired.
 
 - **A background job,** started by `New` and stopped by `Close` like the email sender, deletes them **once an hour**. It first runs 5 minutes after start, so a deploy doesn't set every instance off at once.
 - **Several API instances** each run it, which is harmless, since the deletes don't conflict.

@@ -62,9 +62,7 @@ func (s *Sender) Send(msg mail.Message) {
 func (s *Sender) deliver(msg mail.Message) {
 	var err error
 	for attempt := 0; ; attempt++ {
-		ctx, cancel := context.WithTimeout(context.Background(), attemptTimeout)
-		err = s.mailer.Send(ctx, msg)
-		cancel()
+		err = s.attempt(msg)
 		if err == nil || attempt == len(s.backoff) {
 			break
 		}
@@ -85,6 +83,23 @@ func (s *Sender) deliver(msg mail.Message) {
 			slog.String("error", err.Error()))
 	}
 }
+
+// attempt sends msg once. A panic in the Mailer counts as a failed
+// attempt: this runs on its own goroutine, where a panic would stop the
+// whole process. The panic's value isn't kept, since it could hold the
+// message.
+func (s *Sender) attempt(msg mail.Message) (err error) {
+	ctx, cancel := context.WithTimeout(context.Background(), attemptTimeout)
+	defer cancel()
+	defer func() {
+		if recover() != nil {
+			err = errMailerPanicked
+		}
+	}()
+	return s.mailer.Send(ctx, msg)
+}
+
+var errMailerPanicked = errors.New("the mailer panicked")
 
 // Wait blocks until every message accepted so far has been sent or has
 // failed its last retry. It's for tests; servers use Close.

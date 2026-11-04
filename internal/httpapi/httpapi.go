@@ -51,11 +51,19 @@ func WriteError(w http.ResponseWriter, r *http.Request, status int, code, messag
 }
 
 // WriteInternalError logs err and writes a generic 500. The client never
-// sees err, which may contain internal details.
+// sees err, which may contain internal details. An error from the client
+// going away is logged at debug, not as an error.
 func WriteInternalError(w http.ResponseWriter, r *http.Request, log *slog.Logger, err error) {
-	log.ErrorContext(r.Context(), "auth: internal error",
-		slog.String("request_id", RequestIDFrom(r.Context())),
-		slog.String("error", err.Error()))
+	if errors.Is(err, context.Canceled) && r.Context().Err() != nil {
+		// The client went away, so the work was cut short. That isn't an
+		// error to fix, and nobody reads the response.
+		log.DebugContext(r.Context(), "auth: request canceled",
+			slog.String("request_id", RequestIDFrom(r.Context())))
+	} else {
+		log.ErrorContext(r.Context(), "auth: internal error",
+			slog.String("request_id", RequestIDFrom(r.Context())),
+			slog.String("error", err.Error()))
+	}
 	WriteError(w, r, http.StatusInternalServerError, "internal_error", "Something went wrong. Please try again.", nil)
 }
 

@@ -101,9 +101,7 @@ func (a *Auth) authenticate(w http.ResponseWriter, r *http.Request, setupOK bool
 		httpapi.WriteInternalError(w, r, a.log, err)
 		return current{}, false
 	}
-	// Checked on every request, so a user promoted to a privileged role
-	// after logging in gets the 12-hour limit too.
-	if tf.privileged && !a.now().Before(s.CreatedAt.Add(session.Privileged.MaxLifetime)) {
+	if a.pastPrivilegedLimit(s, tf) {
 		if err := a.sessions.Revoke(r.Context(), s.UserID, s.ID); err != nil && !errors.Is(err, session.ErrNotFound) {
 			httpapi.WriteInternalError(w, r, a.log, err)
 			return current{}, false
@@ -116,6 +114,14 @@ func (a *Auth) authenticate(w http.ResponseWriter, r *http.Request, setupOK bool
 		return current{}, false
 	}
 	return current{user: userFromRow(row), session: s}, true
+}
+
+// pastPrivilegedLimit reports whether s, a session of a user with 2FA
+// state tf, is past the 12-hour limit for privileged roles. It's checked on
+// every request, not only when the session is created, so a user promoted
+// to a privileged role after logging in gets the limit too.
+func (a *Auth) pastPrivilegedLimit(s session.Session, tf twoFactorState) bool {
+	return tf.privileged && !a.now().Before(s.CreatedAt.Add(session.Privileged.MaxLifetime))
 }
 
 func withCurrent(r *http.Request, c current) *http.Request {

@@ -8,7 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/atlasopsec/auth/internal/emailtoken"
 	"github.com/atlasopsec/auth/internal/token"
@@ -452,5 +454,58 @@ func TestReinvitingCantReplaceWhatYouCouldntCancel(t *testing.T) {
 	}
 	if got := f.roleOf(t, tm.org, u.User.ID); got != OwnerRole {
 		t.Errorf("role %q, want owner", got)
+	}
+}
+
+// TestInvitationSubjectIsOneLine checks a line break in an organization's
+// name can't break the invitation email's subject into more headers.
+func TestInvitationSubjectIsOneLine(t *testing.T) {
+	t.Parallel()
+	f := setupOrgs(t, Config{})
+	tm := f.team(t)
+	if res := f.do(t, http.MethodPatch, tm.path(""), `{"name":"Acme\r\nBcc: someone@example.net"}`, withToken(tm.users[OwnerRole].Token)); res.status != http.StatusOK {
+		t.Fatalf("renaming: status %d, body %s", res.status, res.body)
+	}
+	if res := f.invite(t, tm, OwnerRole, invitee, "member"); res.status != http.StatusCreated {
+		t.Fatalf("inviting: status %d, body %s", res.status, res.body)
+	}
+	m := f.emailsTo(invitee)
+	if want := "You're invited to join Acme  Bcc: someone@example.net on Example"; len(m) != 1 || m[0].Subject != want {
+		t.Errorf("invitation emails = %+v, want one with subject %q", m, want)
+	}
+}
+
+// TestCleanupDeletesEndedInvitations checks accepted and expired
+// invitations, which hold email addresses, are deleted, and pending ones
+// kept.
+func TestCleanupDeletesEndedInvitations(t *testing.T) {
+	t.Parallel()
+	f := setupOrgs(t, Config{})
+	tm := f.team(t)
+	ctx := context.Background()
+
+	f.invite(t, tm, OwnerRole, invitee, "member")
+	tok := f.invitationToken(t, invitee)
+	u := f.user(t, invitee)
+	if res := f.accept(t, u.Token, tok); res.status != http.StatusOK {
+		t.Fatalf("accepting: status %d, body %s", res.status, res.body)
+	}
+	f.invite(t, tm, OwnerRole, "expired@example.com", "member")
+	f.clock.advance(InvitationLifetime)
+	f.invite(t, tm, OwnerRole, "pending@example.com", "member")
+
+	if err := f.auth.Cleanup(ctx); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := f.pool.Query(ctx, `SELECT email FROM auth.invitations`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	left, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diff := cmp.Diff([]string{"pending@example.com"}, left); diff != "" {
+		t.Errorf("invitations left (-want +got):\n%s", diff)
 	}
 }

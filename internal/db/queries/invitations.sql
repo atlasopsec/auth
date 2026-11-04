@@ -43,3 +43,8 @@ SELECT * FROM auth.invitations WHERE token_hash = @token_hash;
 -- name: AcceptInvitation :execrows
 UPDATE auth.invitations SET accepted_at = @now, updated_at = @now
 WHERE id = @id AND accepted_at IS NULL AND expires_at > @now;
+
+-- Accepted and expired invitations are refused anyway, and hold an email
+-- address, which isn't kept longer than needed.
+-- name: DeleteEndedInvitations :execrows
+DELETE FROM auth.invitations WHERE accepted_at IS NOT NULL OR expires_at <= @now;

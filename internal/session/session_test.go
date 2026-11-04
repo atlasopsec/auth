@@ -511,3 +511,27 @@ func changeLastChar(tok string) string {
 	}
 	return tok[:len(tok)-1] + string(last)
 }
+
+func TestListIsLimited(t *testing.T) {
+	t.Parallel()
+	f := setup(t)
+	alice := f.newUser(t)
+	_, oldest := f.create(t, alice, Standard)
+	for range MaxListed {
+		f.clock.advance(time.Second)
+		f.create(t, alice, Standard)
+	}
+
+	got, err := f.m.List(context.Background(), alice)
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(got) != MaxListed {
+		t.Errorf("List() returned %d sessions, want %d", len(got), MaxListed)
+	}
+	for _, s := range got {
+		if s.ID == oldest.ID {
+			t.Error("List() kept the least recently used session over newer ones")
+		}
+	}
+}

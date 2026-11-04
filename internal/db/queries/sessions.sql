@@ -19,7 +19,8 @@ WHERE id = @id;
 -- name: ListActiveSessions :many
 SELECT * FROM auth.sessions
 WHERE user_id = @user_id AND expires_at > @now AND absolute_expires_at > @now
-ORDER BY last_used_at DESC, id DESC;
+ORDER BY last_used_at DESC, id DESC
+LIMIT @max_rows;
 
 -- name: DeleteSession :execrows
 DELETE FROM auth.sessions WHERE id = @id AND user_id = @user_id;
