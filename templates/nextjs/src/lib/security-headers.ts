@@ -5,10 +5,9 @@
 //
 // The Content Security Policy here is only the part that needs no nonce:
 // no framing by other sites, no plugins, and no <base> pointing elsewhere.
-// The nonce-based script-src the standard asks for doesn't work with
-// cacheComponents (see "Content Security Policy" in the README). A project
-// that adds the full policy in proxy.ts should remove this one, since the
-// full policy includes these directives.
+// It covers responses proxy.ts doesn't run on. On pages, proxy.ts adds the
+// full nonce-based policy; a browser applies both, and the full one
+// includes these directives, so they don't conflict.
 export const securityHeaders = [
   {
     key: "Strict-Transport-Security",
