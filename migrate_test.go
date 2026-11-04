@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/atlasopsec/auth/internal/migrate"
 	"github.com/atlasopsec/auth/internal/migrations"
 	"github.com/atlasopsec/auth/internal/testdb"
 )
@@ -348,14 +349,14 @@ func TestIndexMigrationRebuildsAnInvalidIndex(t *testing.T) {
 	t.Parallel()
 	pool := testdb.New(t)
 	ctx := context.Background()
-	if err := Migrate(ctx, pool); err != nil {
-		t.Fatalf("Migrate() error = %v", err)
+	// As a failed concurrent build in migration 12 leaves things: the
+	// index is there but invalid, and the migration isn't recorded.
+	if err := migrate.UpTo(ctx, pool, 11); err != nil {
+		t.Fatalf("UpTo(11) error = %v", err)
 	}
-	// As a failed concurrent build leaves things: the index is there but
-	// invalid, and the migration isn't recorded.
 	if _, err := pool.Exec(ctx, `
-		UPDATE pg_index SET indisvalid = false WHERE indexrelid = 'auth.idx_auth_events_actor_id'::regclass;
-		DELETE FROM auth.goose_db_version WHERE version_id = 12;`); err != nil {
+		CREATE INDEX idx_auth_events_actor_id ON auth.auth_events (actor_id);
+		UPDATE pg_index SET indisvalid = false WHERE indexrelid = 'auth.idx_auth_events_actor_id'::regclass;`); err != nil {
 		t.Fatal(err)
 	}
 
