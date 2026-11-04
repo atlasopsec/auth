@@ -21,6 +21,11 @@ export function safeNext(next: unknown): string | null {
   if (url.origin !== BASE) {
     return null;
   }
+  // Resolving dot segments can leave a path that starts with "//", as
+  // "/.//evil.example" does, which a browser would read as another site.
+  if (url.pathname.startsWith("//")) {
+    return null;
+  }
   return url.pathname + url.search + url.hash;
 }
 
