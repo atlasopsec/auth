@@ -2,6 +2,20 @@
 
 Changes to the Next.js template. Projects that copied it can check here what to copy again.
 
+## 0.5.0
+
+Works with the auth module's `v1.5.0` and later: the 2FA step now sends `device_token`, which earlier versions refuse as an unknown field (`400`). Every copied file's header comment now says 0.5.0, but files not named here are otherwise unchanged.
+
+- **Security:** the security standard's nonce-based Content Security Policy, on every page. Only scripts carrying the response's nonce run, so a script injected through a bug doesn't. See "Content Security Policy" in the README.
+  - Copy `src/proxy.ts`, the new `src/lib/csp.ts`, and `next.config.ts`, and add `export const dynamic = "force-dynamic";` to your root layout.
+  - **Move your protected paths** from `proxy.ts`'s `matcher` to its new `PROTECTED` list. The proxy now runs on every page, to set the policy, and redirects logged-out visitors only on those paths.
+  - **Every page is rendered per request:** `cacheComponents` and `partialPrefetching` are off, since pages built ahead of time can't carry a per-request nonce. That costs some speed.
+  - In `pnpm dev`, React logs that it can't use `eval()`, and skips some debugging extras. Pages still work, and production builds never use it.
+- **Security:** the security standard's other headers on every response: `Strict-Transport-Security`, `X-Content-Type-Options`, `Referrer-Policy`, `Permissions-Policy`, `X-Frame-Options`, and the parts of the policy that need no nonce. Before, other sites could frame the app's pages (clickjacking). Copy the new `src/lib/security-headers.ts` and `next.config.ts`.
+- **Security:** the safe `next` check no longer lets through paths that resolve to another site, such as `/.//evil.example`. The template checked `next` twice, so this wasn't reachable in it, but a project calling `safeNext` once before redirecting had an open redirect. Copy `src/lib/auth/safe-next.ts`.
+- **Added:** the 2FA step sends the `__Host-device` cookie's device token and keeps the one that comes back, which records a code was entered in this browser. Someone else's wrong codes then can't pause 2FA for it. Copy `src/lib/auth/actions.ts` and `src/lib/api/schemas.ts`.
+- **Added:** a notice for `409 oauth_link_required`, when a provider's email is an existing account's but the provider doesn't run that address: log in, then link the provider from settings. Copy `src/app/oauth/callback/route.ts` and `src/lib/auth/notices.ts`.
+
 ## 0.4.0
 
 Works with the auth module's `v1.0.0` and later. Every copied file's header comment now says 0.4.0, but files not named here are otherwise unchanged.

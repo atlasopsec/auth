@@ -4,7 +4,7 @@ The web half of [`github.com/atlasopsec/auth`](../../README.md): the session coo
 
 It's a complete Next.js app so it can be run and tested, but projects **copy parts of it** into their own app rather than starting from it.
 
-**Template version 0.4.0**, for the auth module's `v1.0.0` and later. What changed between versions is in [CHANGELOG.md](CHANGELOG.md). Each copied file starts with a comment naming the version it came from.
+**Template version 0.5.0**, for the auth module's `v1.5.0` and later. What changed between versions is in [CHANGELOG.md](CHANGELOG.md). Each copied file starts with a comment naming the version it came from.
 
 ## What to copy
 
