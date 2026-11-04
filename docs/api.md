@@ -985,6 +985,7 @@ When a provider confirms who the user is:
    - **Not verified:** refused with `403 oauth_email_not_verified` ("Verify your email with Google first"). Nothing is created.
 3. **An existing account with that email:**
    - **If its email is verified,** the provider is linked to it and the user is logged in. That's the same trust as a password reset link to that inbox.
+   - **If it already has another account with this provider linked,** such as a second GitHub account with the same verified address, nothing changes and the answer is `401 oauth_failed`. A user has one account per provider, and the one linked isn't replaced.
    - **If its email isn't verified,** this is §2's pre-hijacking case: someone may have signed up with this address first. Its password, sessions, 2FA, pending email tokens, and linked providers are deleted. Then the email is marked verified, the provider is linked, and the real owner is logged in. A password reset takes back such an account the same way.
 4. **No account** → a new user with that email, already verified, with no password. `OnUserCreated` runs, as for any sign-up. If it returns `ErrSignUpNotAllowed`, nothing is created and the answer is `403 sign_up_not_allowed`. The provider has already shown that the user owns the address, so this reveals nothing to anyone else.
 
@@ -1150,7 +1151,7 @@ The standard: "slow down further attempts (growing delays) instead of locking th
   - **Mobile apps** should keep the token in `expo-secure-store` with the session token, and send it with every password login.
 - **Counts start over after an hour without failures** for that key. The exact schedule: no wait after the first 5 failures (20 per account); after the next failure 1 second, then 2, 4, and so on, capped at 15 minutes.
 - **Stored in `auth.login_failures`** (migration `00009`), one row per key with its count and the time the next attempt is allowed. Emails appear only as hashes. The cleanup job deletes rows an hour after their last failure, once their wait is over.
-- **Concurrent attempts** that arrive in the same instant can each be checked before either failure is counted. The per-IP login limit (30 per 10 minutes) bounds that.
+- **Each attempt is counted before its password is checked,** under a lock on its keys' rows, and a correct password takes it back out again. So attempts sent at once, even from many IPs, can't all be checked before any is counted: once a key passes its threshold, only one attempt is checked and the rest wait. A correct password's attempt is removed from the per-account count, so it doesn't add to the failures others have sent; the per-account-and-IP and device token counts are cleared, as above.
 
 ### The event log (Decision)
 

@@ -428,6 +428,35 @@ func TestInvitationFromSomeoneRemovedOrDemoted(t *testing.T) {
 	}
 }
 
+// TestReinvitingCantReplaceWhatYouCouldntCancel checks that inviting an
+// address again, which replaces its pending invitation, is refused when
+// the earlier one is for a role you couldn't cancel.
+func TestReinvitingCantReplaceWhatYouCouldntCancel(t *testing.T) {
+	t.Parallel()
+	f := setupOrgs(t, Config{})
+	tm := f.team(t)
+	if res := f.invite(t, tm, OwnerRole, invitee, OwnerRole); res.status != http.StatusCreated {
+		t.Fatalf("owner inviting an owner: status %d, body %s", res.status, res.body)
+	}
+	ownerTok := f.invitationToken(t, invitee)
+	f.clock.advance(emailtoken.Cooldown)
+
+	// An admin may invite a member, but not cancel an owner's invitation.
+	if res := f.invite(t, tm, "admin", invitee, "member"); res.status != http.StatusForbidden {
+		t.Errorf("admin replacing an owner invitation: status %d, body %s; want 403", res.status, res.body)
+	}
+	if n := len(f.emailsTo(invitee)); n != 1 {
+		t.Errorf("%d emails, want only the owner's", n)
+	}
+	u := f.user(t, invitee)
+	if res := f.accept(t, u.Token, ownerTok); res.status != http.StatusOK {
+		t.Errorf("the owner's invitation: status %d, body %s; want it still to work", res.status, res.body)
+	}
+	if got := f.roleOf(t, tm.org, u.User.ID); got != OwnerRole {
+		t.Errorf("role %q, want owner", got)
+	}
+}
+
 // TestInvitationSubjectIsOneLine checks a line break in an organization's
 // name can't break the invitation email's subject into more headers.
 func TestInvitationSubjectIsOneLine(t *testing.T) {

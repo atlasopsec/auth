@@ -566,3 +566,21 @@ func TestConcurrentFirstOAuthSignIns(t *testing.T) {
 		})
 	}
 }
+
+// TestOAuthSignInWhenEmailHasAnotherProviderAccount checks signing in with
+// a second account at a provider, whose verified email is that of a user
+// who already linked another account there. One account per provider per
+// user, so it's refused like any failed sign-in, not with a 500.
+func TestOAuthSignInWhenEmailHasAnotherProviderAccount(t *testing.T) {
+	t.Parallel()
+	f := setupOAuth(t, Config{})
+	first := loginOf(t, f.googleSignIn(t, ada("g-1")))
+
+	wantError(t, "second Google account", f.googleSignIn(t, ada("g-2")), 401, "oauth_failed")
+	if l := loginOf(t, f.googleSignIn(t, ada("g-1"))); l.User.ID != first.User.ID {
+		t.Errorf("first Google account signed in as %s, want %s", l.User.ID, first.User.ID)
+	}
+	if f.userCount(t) != 1 {
+		t.Errorf("%d users, want 1", f.userCount(t))
+	}
+}

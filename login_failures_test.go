@@ -231,3 +231,61 @@ func TestPasswordChangeIsLimitedPerIP(t *testing.T) {
 	}
 	wantRateLimited(t, "over the per-IP limit", f.do(t, http.MethodPost, "/v1/users/me/password", `{}`, withToken(l.Token), fromIP(ip)))
 }
+
+// TestFailedLoginsHoldConcurrently checks that wrong passwords sent at
+// once, from many IPs, can't all be checked before any is counted: once
+// the account-wide count reaches its threshold, only one more is checked
+// until the delay is over.
+func TestFailedLoginsHoldConcurrently(t *testing.T) {
+	t.Parallel()
+	f := setup(t, Hooks{})
+	f.signUp(t, testEmail)
+	for i := range accountThreshold {
+		wantError(t, fmt.Sprintf("wrong password %d", i+1), f.tryLogIn(t, testEmail, "not my password", nextTestIP()), 401, "invalid_credentials")
+	}
+
+	const n = 10
+	results := make(chan int, n)
+	var wg sync.WaitGroup
+	for range n {
+		ip := nextTestIP()
+		wg.Go(func() {
+			results <- f.tryLogIn(t, testEmail, "not my password", ip).status
+		})
+	}
+	wg.Wait()
+	close(results)
+	checked := 0
+	for status := range results {
+		switch status {
+		case http.StatusUnauthorized:
+			checked++
+		case http.StatusTooManyRequests:
+		default:
+			t.Errorf("status %d, want 401 or 429", status)
+		}
+	}
+	if checked != 1 {
+		t.Errorf("%d of %d guesses sent at once were checked, want 1", checked, n)
+	}
+}
+
+// TestRightPasswordIsNotCountedAccountWide checks that a login with the
+// right password, though counted while its password is checked, doesn't
+// add to the account-wide count that failures from elsewhere build up.
+func TestRightPasswordIsNotCountedAccountWide(t *testing.T) {
+	t.Parallel()
+	f := setup(t, Hooks{})
+	f.signUp(t, testEmail)
+	for i := range accountThreshold {
+		wantError(t, fmt.Sprintf("wrong password %d", i+1), f.tryLogIn(t, testEmail, "not my password", nextTestIP()), 401, "invalid_credentials")
+	}
+	for i := range 2 {
+		if res := f.tryLogIn(t, testEmail, testPassword, nextTestIP()); res.status != http.StatusCreated {
+			t.Fatalf("right password %d: status %d, body %s", i+1, res.status, res.body)
+		}
+	}
+	// The 21st failure waits 1 second, as it would without the logins.
+	wantError(t, "wrong password 21", f.tryLogIn(t, testEmail, "not my password", nextTestIP()), 401, "invalid_credentials")
+	wantRetryAfter(t, "after the 21st", f.tryLogIn(t, testEmail, "not my password", nextTestIP()), 1)
+}
