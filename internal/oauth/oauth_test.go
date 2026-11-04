@@ -195,3 +195,85 @@ func TestApple(t *testing.T) {
 		}
 	}
 }
+
+// TestGoogleEmailOwnedByProvider checks a verified Google address counts
+// as Google's own only for Gmail and Google Workspace (the hd claim), as
+// Google's guidance says.
+func TestGoogleEmailOwnedByProvider(t *testing.T) {
+	t.Parallel()
+	fake := oauthtest.NewGoogle(t, clock)
+	p := oauth.NewGoogle(oauthtest.ClientID, oauthtest.ClientSecret, fake.Endpoints(), clock)
+	const verifier = "verifier-0123456789012345678901234567890123"
+	for _, tt := range []struct {
+		name string
+		user oauthtest.GoogleUser
+		want bool
+	}{
+		{"Gmail", oauthtest.GoogleUser{Subject: "g-1", Email: "ada@gmail.com", EmailVerified: true}, true},
+		{"Gmail in capitals", oauthtest.GoogleUser{Subject: "g-1", Email: "Ada@GMail.com", EmailVerified: true}, true},
+		{"Workspace", oauthtest.GoogleUser{Subject: "g-1", Email: "ada@example.com", EmailVerified: true, Claims: map[string]any{"hd": "example.com"}}, true},
+		{"another domain", oauthtest.GoogleUser{Subject: "g-1", Email: "ada@example.com", EmailVerified: true}, false},
+		{"a lookalike of Gmail", oauthtest.GoogleUser{Subject: "g-1", Email: "ada@notgmail.com", EmailVerified: true}, false},
+		{"unverified Gmail", oauthtest.GoogleUser{Subject: "g-1", Email: "ada@gmail.com"}, false},
+		{"unverified Workspace", oauthtest.GoogleUser{Subject: "g-1", Email: "ada@example.com", Claims: map[string]any{"hd": "example.com"}}, false},
+	} {
+		code, _ := fake.Authorize(p.AuthCodeURL("state", verifier, "nonce-1", redirect), tt.user)
+		got, err := p.Exchange(context.Background(), code, verifier, "nonce-1", redirect)
+		if err != nil {
+			t.Errorf("%s: %v", tt.name, err)
+			continue
+		}
+		if got.EmailOwnedByProvider != tt.want {
+			t.Errorf("%s: EmailOwnedByProvider = %v, want %v", tt.name, got.EmailOwnedByProvider, tt.want)
+		}
+	}
+}
+
+// TestGitHubEmailIsNeverOwnedByProvider checks GitHub, which runs nobody's
+// mailbox, never vouches for an address beyond its being verified once.
+func TestGitHubEmailIsNeverOwnedByProvider(t *testing.T) {
+	t.Parallel()
+	fake := oauthtest.NewGitHub(t)
+	p := oauth.NewGitHub(oauthtest.ClientID, oauthtest.ClientSecret, fake.Endpoints())
+	const verifier = "verifier-0123456789012345678901234567890123"
+	code, _ := fake.Authorize(p.AuthCodeURL("state", verifier, "", redirect), oauthtest.GitHubUser{ID: 42, Emails: []oauthtest.GitHubEmail{{Email: "ada@gmail.com", Primary: true, Verified: true}}})
+	got, err := p.Exchange(context.Background(), code, verifier, "", redirect)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.EmailVerified || got.EmailOwnedByProvider {
+		t.Errorf("identity = %+v, want verified but not owned by GitHub", got)
+	}
+}
+
+// TestAppleEmailOwnedByProvider checks a verified Apple address counts as
+// Apple's own only for Hide My Email relay addresses and iCloud Mail.
+func TestAppleEmailOwnedByProvider(t *testing.T) {
+	t.Parallel()
+	fake := oauthtest.NewApple(t, clock)
+	a := oauth.NewApple([]string{oauthtest.BundleID}, fake.Endpoints(), clock)
+	const nonce = "a-random-nonce-from-the-app"
+	for _, tt := range []struct {
+		name string
+		user oauthtest.AppleUser
+		want bool
+	}{
+		{"Hide My Email", oauthtest.AppleUser{Subject: "a-1", Email: "x1y2@privaterelay.appleid.com", EmailVerified: true, Claims: map[string]any{"is_private_email": "true"}}, true},
+		{"Hide My Email as a boolean", oauthtest.AppleUser{Subject: "a-1", Email: "x1y2@privaterelay.appleid.com", EmailVerified: true, Claims: map[string]any{"is_private_email": true}}, true},
+		{"iCloud", oauthtest.AppleUser{Subject: "a-1", Email: "ada@icloud.com", EmailVerified: true}, true},
+		{"me.com", oauthtest.AppleUser{Subject: "a-1", Email: "ada@me.com", EmailVerified: true}, true},
+		{"mac.com", oauthtest.AppleUser{Subject: "a-1", Email: "ada@mac.com", EmailVerified: true}, true},
+		{"another domain", oauthtest.AppleUser{Subject: "a-1", Email: "ada@example.com", EmailVerified: true}, false},
+		{"another domain, not private", oauthtest.AppleUser{Subject: "a-1", Email: "ada@example.com", EmailVerified: true, Claims: map[string]any{"is_private_email": "false"}}, false},
+		{"unverified iCloud", oauthtest.AppleUser{Subject: "a-1", Email: "ada@icloud.com"}, false},
+	} {
+		got, _, err := a.Verify(context.Background(), fake.IdentityToken(tt.user, nonce), nonce)
+		if err != nil {
+			t.Errorf("%s: %v", tt.name, err)
+			continue
+		}
+		if got.EmailOwnedByProvider != tt.want {
+			t.Errorf("%s: EmailOwnedByProvider = %v, want %v", tt.name, got.EmailOwnedByProvider, tt.want)
+		}
+	}
+}

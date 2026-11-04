@@ -89,13 +89,17 @@ func TestAppleSignInRejects(t *testing.T) {
 	wantError(t, "Apple redirect flow", f.do(t, http.MethodPost, "/v1/oauth-flows", startBody(providerApple, "web", challengeOf(token.New()))), 422, "validation_failed")
 }
 
+// iCloudEmail is an address at Apple's own mail service, so Apple runs its
+// mailbox and a verified one can sign in to an existing account by email.
+const iCloudEmail = "ada@icloud.com"
+
 func TestAppleSignInWithTwoFactor(t *testing.T) {
 	t.Parallel()
 	f := setupOAuth(t, Config{AllowUnverifiedLogin: true})
-	v := f.verifiedUser(t, testEmail)
+	v := f.verifiedUser(t, iCloudEmail)
 	secret, _ := f.enableTwoFactor(t, v.Token)
 
-	res := f.appleSignIn(t, oauthtest.AppleUser{Subject: "a-1", Email: testEmail, EmailVerified: true})
+	res := f.appleSignIn(t, oauthtest.AppleUser{Subject: "a-1", Email: iCloudEmail, EmailVerified: true})
 	if l := loginOf(t, f.verify(t, challengeIn(t, res), f.code(secret))); l.User.ID != v.User.ID {
 		t.Errorf("logged in as %s, want %s", l.User.ID, v.User.ID)
 	}
@@ -104,14 +108,14 @@ func TestAppleSignInWithTwoFactor(t *testing.T) {
 func TestUnlinkApple(t *testing.T) {
 	t.Parallel()
 	f := setupOAuth(t, Config{AllowUnverifiedLogin: true})
-	v := f.verifiedUser(t, testEmail)
-	loginOf(t, f.appleSignIn(t, oauthtest.AppleUser{Subject: "a-1", Email: testEmail, EmailVerified: true}))
+	v := f.verifiedUser(t, iCloudEmail)
+	loginOf(t, f.appleSignIn(t, oauthtest.AppleUser{Subject: "a-1", Email: iCloudEmail, EmailVerified: true}))
 	apple := f.oauthAccounts(t, v.Token).Data[0].ID
 
 	if res := f.unlink(t, v.Token, apple, testPassword); res.status != http.StatusNoContent {
 		t.Fatalf("unlinking: status %d, body %s", res.status, res.body)
 	}
-	if got := f.lastSubject(testEmail); got != "Apple sign-in was removed from your Example account" {
+	if got := f.lastSubject(iCloudEmail); got != "Apple sign-in was removed from your Example account" {
 		t.Errorf("last email = %q", got)
 	}
 }
