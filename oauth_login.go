@@ -391,6 +391,15 @@ func (a *Auth) oauthLogInOnce(r *http.Request, provider string, id oauth.Identit
 			if userID, err = a.userForOAuthEmail(ctx, tx, email, now, &res); err != nil {
 				return err
 			}
+			// The account with that email may already have another account
+			// with this provider linked, which can't be replaced here.
+			linked, err := q.UserHasOAuthProvider(ctx, db.UserHasOAuthProviderParams{UserID: userID, Provider: provider})
+			if err != nil {
+				return fmt.Errorf("reading OAuth accounts: %w", err)
+			}
+			if linked {
+				return fmt.Errorf("%w: the account with the provider's email has another %s account linked", errOAuthFailed, provider)
+			}
 			aid, err := uuid.NewV7()
 			if err != nil {
 				return fmt.Errorf("generating OAuth account ID: %w", err)
