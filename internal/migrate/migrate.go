@@ -54,8 +54,14 @@ func run(ctx context.Context, pool *pgxpool.Pool, up func(*goose.Provider) error
 		return err
 	}
 
-	// Closing this *sql.DB doesn't close the caller's pool.
-	db := stdlib.OpenDBFromPool(pool)
+	// Migrations get connections of their own, made from the pool's
+	// settings, rather than ones borrowed from the pool. A session setting
+	// a migration makes, such as the SET lock_timeout the database
+	// standard starts each with, outlasts its transaction, and would
+	// otherwise go back to the pool with the connection and apply to the
+	// project's own queries. These are closed when Run returns; the
+	// caller's pool is left as it was.
+	db := stdlib.OpenDB(*pool.Config().ConnConfig.Copy())
 	defer func() {
 		if cerr := db.Close(); cerr != nil {
 			err = errors.Join(err, fmt.Errorf("auth: closing migration connection: %w", cerr))

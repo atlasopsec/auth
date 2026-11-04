@@ -391,3 +391,27 @@ func TestIndexMigrationResetsLockTimeout(t *testing.T) {
 		}
 	}
 }
+
+// TestMigrationSettingsStayOffThePool checks a session setting a migration
+// makes, such as the SET lock_timeout the database standard starts each
+// one with, doesn't reach the project's pool. Migration 11 sets one and
+// doesn't reset it, so the connection it ran on mustn't be the pool's.
+func TestMigrationSettingsStayOffThePool(t *testing.T) {
+	t.Parallel()
+	pool := testdb.New(t)
+	ctx := context.Background()
+	if err := migrate.UpTo(ctx, pool, 11); err != nil {
+		t.Fatalf("UpTo(11) error = %v", err)
+	}
+	for _, c := range pool.AcquireAllIdle(ctx) {
+		var timeout string
+		err := c.QueryRow(ctx, `SHOW lock_timeout`).Scan(&timeout)
+		c.Release()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if timeout != "0" {
+			t.Errorf("a pool connection has lock_timeout %s, want 0", timeout)
+		}
+	}
+}
