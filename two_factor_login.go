@@ -246,6 +246,19 @@ func (a *Auth) verifyChallenge(w http.ResponseWriter, r *http.Request) {
 	)
 	err := a.withTx(ctx, func(tx pgx.Tx) error {
 		q := db.New(tx)
+		// Lock the user's 2FA secret before the challenge: resetting 2FA or
+		// the password locks the secret and then deletes challenges, so
+		// taking the locks the other way round could deadlock with them.
+		userID, err := q.GetTwoFactorChallengeUser(ctx, token.Hash(req.ChallengeToken))
+		if errors.Is(err, pgx.ErrNoRows) {
+			return errChallengeInvalid
+		}
+		if err != nil {
+			return fmt.Errorf("reading 2FA challenge: %w", err)
+		}
+		if _, err := q.GetTOTPSecretForUpdate(ctx, userID); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("locking 2FA: %w", err)
+		}
 		ch, err := q.GetTwoFactorChallengeForUpdate(ctx, token.Hash(req.ChallengeToken))
 		if errors.Is(err, pgx.ErrNoRows) {
 			return errChallengeInvalid

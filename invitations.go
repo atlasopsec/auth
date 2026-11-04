@@ -49,7 +49,8 @@ type inviteRequest struct {
 
 // invite emails an invitation to join the organization. The usual
 // no-escalation rule applies to the role, and inviting the same address
-// again replaces the earlier invitation, at most once a minute.
+// again replaces the earlier invitation, at most once a minute, if you
+// could have cancelled it.
 func (a *Auth) invite(w http.ResponseWriter, r *http.Request) {
 	c, _ := currentFrom(r.Context())
 	var req inviteRequest
@@ -89,8 +90,7 @@ func (a *Auth) invite(w http.ResponseWriter, r *http.Request) {
 	}
 
 	inv, tok, err := a.createInvitation(ctx, c.org.ID, c.user.ID, req.Email, req.Role)
-	if err != nil {
-		httpapi.WriteInternalError(w, r, a.log, err)
+	if a.writeMemberChangeError(w, r, err) {
 		return
 	}
 	if tok != "" {
@@ -114,53 +114,61 @@ func (a *Auth) invite(w http.ResponseWriter, r *http.Request) {
 // createInvitation replaces any pending invitation for the address with a
 // new one, and returns it with its token. Within the cooldown it returns
 // the pending invitation unchanged and no token, so nothing is sent.
+//
+// It runs under the organization's lock and checks again there that the
+// inviter still has members:manage and may give the role. Replacing an
+// earlier invitation cancels it, so the inviter must also be allowed to
+// cancel that one: otherwise re-inviting an address would replace an
+// owner's invitation for a role the inviter couldn't grant. It returns
+// errForbidden if not.
 func (a *Auth) createInvitation(ctx context.Context, orgID, inviter uuid.UUID, email, role string) (db.AuthInvitation, string, error) {
 	id, err := uuid.NewV7()
 	if err != nil {
 		return db.AuthInvitation{}, "", fmt.Errorf("generating invitation ID: %w", err)
 	}
-	tx, err := a.pool.Begin(ctx)
-	if err != nil {
-		return db.AuthInvitation{}, "", fmt.Errorf("beginning invitation: %w", err)
-	}
-	// After Commit this is a no-op.
-	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
-	q := db.New(tx)
-	// Serializes invitations to the organization, so the cooldown holds
-	// under concurrent requests.
-	if _, err := q.LockOrganization(ctx, orgID); err != nil {
-		return db.AuthInvitation{}, "", err
-	}
-	now := a.now().UTC().Truncate(time.Microsecond)
-
-	prev, err := q.GetPendingInvitationForEmail(ctx, db.GetPendingInvitationForEmailParams{OrganizationID: orgID, Email: email})
-	switch {
-	case err == nil && now.Sub(prev.CreatedAt) < emailtoken.Cooldown:
-		return prev, "", nil
-	case err == nil:
-		if err := q.DeleteInvitation(ctx, prev.ID); err != nil {
-			return db.AuthInvitation{}, "", fmt.Errorf("replacing invitation: %w", err)
+	var (
+		inv db.AuthInvitation
+		tok string
+	)
+	err = a.changeMembers(ctx, orgID, func(q *db.Queries, actorRole string) error {
+		if !a.mayAssign(actorRole, role) {
+			return errForbidden
 		}
-	case !errors.Is(err, pgx.ErrNoRows):
-		return db.AuthInvitation{}, "", fmt.Errorf("finding invitation: %w", err)
-	}
+		now := a.now().UTC().Truncate(time.Microsecond)
+		prev, err := q.GetPendingInvitationForEmail(ctx, db.GetPendingInvitationForEmailParams{OrganizationID: orgID, Email: email})
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
+		case err != nil:
+			return fmt.Errorf("finding invitation: %w", err)
+		case now.Sub(prev.CreatedAt) < emailtoken.Cooldown:
+			inv = prev
+			return nil
+		case !a.mayAssign(actorRole, prev.Role):
+			return errForbidden
+		default:
+			if err := q.DeleteInvitation(ctx, prev.ID); err != nil {
+				return fmt.Errorf("replacing invitation: %w", err)
+			}
+		}
 
-	tok := token.New()
-	inv, err := q.CreateInvitation(ctx, db.CreateInvitationParams{
-		ID:             id,
-		OrganizationID: orgID,
-		Email:          email,
-		Role:           role,
-		TokenHash:      token.Hash(tok),
-		InvitedBy:      inviter,
-		ExpiresAt:      now.Add(InvitationLifetime),
-		Now:            now,
-	})
+		tok = token.New()
+		inv, err = q.CreateInvitation(ctx, db.CreateInvitationParams{
+			ID:             id,
+			OrganizationID: orgID,
+			Email:          email,
+			Role:           role,
+			TokenHash:      token.Hash(tok),
+			InvitedBy:      inviter,
+			ExpiresAt:      now.Add(InvitationLifetime),
+			Now:            now,
+		})
+		if err != nil {
+			return fmt.Errorf("creating invitation: %w", err)
+		}
+		return nil
+	}, inviter, PermMembersManage)
 	if err != nil {
-		return db.AuthInvitation{}, "", fmt.Errorf("creating invitation: %w", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return db.AuthInvitation{}, "", fmt.Errorf("committing invitation: %w", err)
+		return db.AuthInvitation{}, "", err
 	}
 	return inv, tok, nil
 }

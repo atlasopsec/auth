@@ -985,6 +985,7 @@ When a provider confirms who the user is:
    - **Not verified:** refused with `403 oauth_email_not_verified` ("Verify your email with Google first"). Nothing is created.
 3. **An existing account with that email:**
    - **If its email is verified,** the provider is linked to it and the user is logged in. That's the same trust as a password reset link to that inbox.
+   - **If it already has another account with this provider linked,** such as a second GitHub account with the same verified address, nothing changes and the answer is `401 oauth_failed`. A user has one account per provider, and the one linked isn't replaced.
    - **If its email isn't verified,** this is §2's pre-hijacking case: someone may have signed up with this address first. Its password, sessions, 2FA, pending email tokens, and linked providers are deleted. Then the email is marked verified, the provider is linked, and the real owner is logged in. A password reset takes back such an account the same way.
 4. **No account** → a new user with that email, already verified, with no password. `OnUserCreated` runs, as for any sign-up. If it returns `ErrSignUpNotAllowed`, nothing is created and the answer is `403 sign_up_not_allowed`. The provider has already shown that the user owns the address, so this reveals nothing to anyone else.
 

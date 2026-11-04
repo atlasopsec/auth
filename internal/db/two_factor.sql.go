@@ -251,6 +251,17 @@ func (q *Queries) GetTwoFactorChallengeForUpdate(ctx context.Context, tokenHash 
 	return i, err
 }
 
+const getTwoFactorChallengeUser = `-- name: GetTwoFactorChallengeUser :one
+SELECT user_id FROM auth.two_factor_challenges WHERE token_hash = $1
+`
+
+func (q *Queries) GetTwoFactorChallengeUser(ctx context.Context, tokenHash []byte) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, getTwoFactorChallengeUser, tokenHash)
+	var user_id uuid.UUID
+	err := row.Scan(&user_id)
+	return user_id, err
+}
+
 const nthRecentTwoFactorFailure = `-- name: NthRecentTwoFactorFailure :one
 SELECT created_at FROM auth.two_factor_failures
 WHERE user_id = $1 AND created_at > $2
