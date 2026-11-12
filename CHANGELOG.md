@@ -4,6 +4,13 @@ What changed in each release of `github.com/atlasopsec/auth`. The Next.js templa
 
 The exported Go API and the HTTP endpoints follow [semantic versioning](https://semver.org): a minor release only adds, and anything removed or changed waits for the next major version.
 
+## Unreleased
+
+### Security
+
+- Build with Go 1.26.11 (`toolchain go1.26.11`), which fixes **GO-2026-6859** in `net/http`: an HTTP/1 server crash due to a `MaxBytesReader` header race.
+- Upgrade `github.com/klauspost/compress` from v1.20.1 to v1.20.2, which fixes **GO-2026-6865**: a panic on two-block frames. Projects that import the module get at least this version.
+
 ## v1.5.1
 
 ### Security
