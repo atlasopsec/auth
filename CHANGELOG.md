@@ -13,7 +13,7 @@ Importing two-factor. No migrations. See [docs/api.md §14](docs/api.md).
 - `ImportTwoFactor`: turns on a user's 2FA with a TOTP secret from another system (base32, 128 to 512 bits), encrypted with `Config.EncryptionKey`. It ends their sessions, and importing the same secret again changes nothing. Recovery codes aren't imported.
 - The errors `ErrInvalidTwoFactorSecret` and `ErrEmailNotVerified`.
 
-## Unreleased (v1.7.0)
+## v1.7.0
 
 Older password hashes, opt-in. No migrations. See [docs/api.md §13](docs/api.md).
 
@@ -26,7 +26,7 @@ Older password hashes, opt-in. No migrations. See [docs/api.md §13](docs/api.md
 
 - The hash upgrade at login no longer overwrites a password that was changed between the check and the upgrade.
 
-## Unreleased (v1.6.0)
+## v1.6.0
 
 Managing accounts from code, for projects moving their accounts in from another system or running them from their own admin tools. No migrations. See [docs/api.md §12](docs/api.md).
 
