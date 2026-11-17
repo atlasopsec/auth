@@ -304,10 +304,6 @@ type roleRequest struct {
 	Role string `json:"role"`
 }
 
-// errLastOwner means a change would leave an organization without an
-// owner.
-var errLastOwner = errors.New("last owner")
-
 // changeMemberRole changes a member's role. Nobody can grant a role with
 // permissions they don't have themselves, change the role of someone with
 // permissions they don't have, or make or unmake an owner unless they're
@@ -452,7 +448,7 @@ func (a *Auth) writeMemberChangeError(w http.ResponseWriter, r *http.Request, er
 		writeNotFound(w, r)
 	case errors.Is(err, errForbidden):
 		writeForbidden(w, r)
-	case errors.Is(err, errLastOwner):
+	case errors.Is(err, ErrLastOwner):
 		httpapi.WriteError(w, r, http.StatusConflict, "last_owner",
 			"An organization needs at least one owner. Make someone else an owner first.", nil)
 	default:
@@ -461,7 +457,7 @@ func (a *Auth) writeMemberChangeError(w http.ResponseWriter, r *http.Request, er
 	return true
 }
 
-// lastOwnerCheck returns errLastOwner if the organization has only one
+// lastOwnerCheck returns ErrLastOwner if the organization has only one
 // owner. Call it under the organization's lock, before removing or
 // demoting an owner.
 func lastOwnerCheck(ctx context.Context, q *db.Queries, orgID uuid.UUID) error {
@@ -470,7 +466,7 @@ func lastOwnerCheck(ctx context.Context, q *db.Queries, orgID uuid.UUID) error {
 		return fmt.Errorf("counting owners: %w", err)
 	}
 	if n <= 1 {
-		return errLastOwner
+		return ErrLastOwner
 	}
 	return nil
 }

@@ -55,6 +55,13 @@ const (
 	// EventTwoFactorRequiredChanged has metadata "required" ("true" or
 	// "false").
 	EventTwoFactorRequiredChanged = "two_factor_required_changed"
+	// EventUserCreated is a user created from code with CreateUser.
+	// Sign-ups aren't recorded: the user's first login is.
+	EventUserCreated = "user_created"
+	// EventUserDeleted is a user deleted with DeleteUser. UserID is nil,
+	// since the user no longer exists, and metadata "user_id" is their
+	// ID.
+	EventUserDeleted = "user_deleted"
 )
 
 // Event is one entry in the security event log. It never contains
@@ -91,8 +98,9 @@ func (a *Auth) event(r *http.Request, typ string, userID, actorID *uuid.UUID, me
 }
 
 // Actor is who makes a change through one of Auth's admin methods
-// (SetAppRole, SetTwoFactorRequired, ResetTwoFactor, and
-// CreateOrganization), and from where, for the security event log. Admin
+// (SetAppRole, SetTwoFactorRequired, ResetTwoFactor, CreateOrganization,
+// CreateUser, UpdateUser, DeleteUser, EndSessions, SetMemberRole, and
+// RemoveMember), and from where, for the security event log. Admin
 // tooling handling a request gets one with ActorOf. The zero Actor records
 // no one, for seed scripts and changes the system makes itself.
 type Actor struct {
