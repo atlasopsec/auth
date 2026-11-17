@@ -1463,3 +1463,71 @@ So that users moved in from another system keep their authenticator app, and kee
 - **The email must be verified** (`ErrEmailNotVerified`), as for setting 2FA up: 2FA on an account whose address was never proven could lock its real owner out. Users from `CreateUser` are verified.
 - **Recorded** as `two_factor_enabled` with the actor. No email is sent, like the other calls in §12.
 - No endpoint, and no migration.
+
+---
+
+## 15. Roles each organization defines (v1.9.0)
+
+The project still declares its permissions and fixed roles in Go (§7). On top of them, an organization can define roles of its own, built only from those permissions: a client's "Billing clerk" with `invoices:read` and `invoices:create`, say.
+
+### Endpoints
+
+| Endpoint | Purpose | Requires |
+|---|---|---|
+| `GET /v1/organizations/{id}/roles` | The organization's own roles | `members:read` |
+| `POST /v1/organizations/{id}/roles` | Create one: `{ name, permissions }` | `roles:manage` |
+| `PATCH /v1/organizations/{id}/roles/{role_id}` | Rename it or change its permissions | `roles:manage` |
+| `DELETE /v1/organizations/{id}/roles/{role_id}` | Delete it, if nobody has it | `roles:manage` |
+| `PATCH /v1/organizations/{id}/members/{user_id}` | Give a member one: `{ "role": "custom:<role id>" }` | `members:manage` |
+
+A role is returned as `{ id, key, name, permissions, created_at, updated_at }`. Its `key`, `custom:<id>`, is how members have it: it's the `role` in members lists, `GET /v1/organizations`, and `auth.OrgFrom(ctx).Role`. Code checks permissions with `Can`, never role names (§7), so project handlers need no change.
+
+### What the module enforces (Decision)
+
+- **Only declared permissions.** A custom role can have only permissions some role in `Config.OrgRoles` lists by name, never `*` (`422`). If a permission is later removed from code, custom roles stop granting it at once; it's checked on every request, not only when the role is saved.
+- **Nobody grants what they don't hold.** To create a role, change it, or delete it, you need `roles:manage` and every permission it has, before and after the change. To give someone a role, or take one away, you need every permission in it (the existing rule, §7). So nobody can make a role broader than themselves, change their own role into a broader one, or edit a role that's broader than they are.
+- **The owner role stays fixed.** Custom roles live in their own namespace (`custom:…`, a colon code role names can't have), so they never replace or redefine `owner` or any code role, and a custom role can't be named like one, in any case (`422`). Only owners make or change owners, and the last owner can't be given a custom role (`409 last_owner`).
+- **An organization always keeps an owner,** as before: every change to members or roles runs under the organization's lock.
+- **A role in use can't be deleted** (`409 role_in_use`); give its members another role first. The database enforces it too (below).
+- **Another organization's role is never found.** Every lookup filters by organization: it's a `404` on the role endpoints and a `422` when given to a member. The database's foreign key refuses it as well.
+- **Concurrent changes:** creating, changing, and deleting roles, and giving them out, all take the organization's lock and re-read the actor's role and the role's permissions under it. A change to a role and a hand-out of it at the same time are applied one after the other, each checked against what the other left.
+- **2FA can't be dodged with a copy.** With `Config.TwoFactorRoles`, a custom role is privileged (needs 2FA, 12-hour sessions) if it has any permission that only privileged roles in code have. Copying an admin's permissions into "Office admin" doesn't skip 2FA.
+- **Limits:** 50 roles per organization (`409 too_many_roles`), 100 permissions per role, names 1 to 100 characters.
+- **Invitations still use roles defined in code.** Invite with one, then give the member a custom role.
+
+### Go
+
+```go
+// The permission for the role endpoints.
+const PermRolesManage rbac.Permission = "roles:manage"
+
+func CustomRoleKey(roleID uuid.UUID) string // "custom:<id>"
+
+func (a *Auth) CreateOrgRole(ctx context.Context, orgID uuid.UUID, name string, perms []rbac.Permission, by Actor) (OrgRole, error)
+func (a *Auth) UpdateOrgRole(ctx context.Context, orgID, roleID uuid.UUID, c OrgRoleChanges, by Actor) (OrgRole, error)
+func (a *Auth) DeleteOrgRole(ctx context.Context, orgID, roleID uuid.UUID, by Actor) error
+func (a *Auth) ListOrgRoles(ctx context.Context, orgID uuid.UUID) ([]OrgRole, error)
+```
+
+Like the other admin calls (§12), they trust their caller: they check what's declared, names, limits, and roles in use, but not what the caller may grant. `SetMemberRole` takes a custom role's key. Errors: `ErrRoleNotFound`, `ErrRoleInUse`, `ErrInvalidRoleName`, `ErrRoleNameTaken`, `ErrUndeclaredPermission`, `ErrTooManyRoles`.
+
+Projects give `roles:manage` to roles like any other permission; owners always have it. Without it, only owners manage roles.
+
+### Events
+
+`org_role_created`, `org_role_updated`, and `org_role_deleted`, with the actor, and metadata `organization_id`, `role` (the key), and `permissions`. They have no `user_id`, so they're not in `Events(userID)`; `Hooks.OnEvent` gets them.
+
+### Database
+
+Migrations `00014` and `00015`, backward compatible:
+
+```
+auth.organization_roles   id, organization_id, name, permissions text[], created_at, updated_at
+                          unique (organization_id, id), unique (organization_id, lower(name))
+auth.memberships          + custom_role_id (nullable)
+```
+
+- A member with a custom role has `role = 'custom:<id>'` and `custom_role_id = <id>`; a check constraint keeps the two in step.
+- A foreign key from `(organization_id, custom_role_id)` to `auth.organization_roles (organization_id, id)` means a member can only have a role of their own organization, and a role can't be deleted while anyone has it.
+- Nothing existing changes. Constraints are added `NOT VALID` and then validated, and the new index is built `CONCURRENTLY` (`00015`). The previous release, still running during a deploy, reads a custom role as one that's no longer defined, which grants nothing.
+- Deleting an organization deletes its roles.

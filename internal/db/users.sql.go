@@ -87,15 +87,19 @@ func (q *Queries) GetUserByID(ctx context.Context, id uuid.UUID) (AuthUser, erro
 const getUserWithTwoFactor = `-- name: GetUserWithTwoFactor :one
 SELECT u.id, u.email, u.email_verified_at, u.password_hash, u.two_factor_required, u.created_at, u.updated_at,
     (EXISTS (SELECT 1 FROM auth.user_roles r WHERE r.user_id = u.id AND r.role = ANY ($1::text[]))
-        OR EXISTS (SELECT 1 FROM auth.memberships m WHERE m.user_id = u.id AND m.role = ANY ($1::text[])))::boolean AS privileged,
+        OR EXISTS (SELECT 1 FROM auth.memberships m WHERE m.user_id = u.id AND m.role = ANY ($1::text[]))
+        OR EXISTS (SELECT 1 FROM auth.memberships m
+            JOIN auth.organization_roles r ON r.organization_id = m.organization_id AND r.id = m.custom_role_id
+            WHERE m.user_id = u.id AND r.permissions && $2::text[]))::boolean AS privileged,
     EXISTS (SELECT 1 FROM auth.totp_secrets t WHERE t.user_id = u.id AND t.confirmed_at IS NOT NULL)::boolean AS two_factor_enabled
 FROM auth.users u
-WHERE u.id = $2
+WHERE u.id = $3
 `
 
 type GetUserWithTwoFactorParams struct {
-	Roles []string
-	ID    uuid.UUID
+	Roles                 []string
+	PrivilegedPermissions []string
+	ID                    uuid.UUID
 }
 
 type GetUserWithTwoFactorRow struct {
@@ -105,10 +109,11 @@ type GetUserWithTwoFactorRow struct {
 }
 
 // The user, with what decides their 2FA rules: whether they hold one of
-// @roles (Config.TwoFactorRoles) as an app role or in any organization,
-// and whether they have 2FA on.
+// @roles (Config.TwoFactorRoles) as an app role or in any organization, or
+// a role an organization defined with any of @privileged_permissions, and
+// whether they have 2FA on.
 func (q *Queries) GetUserWithTwoFactor(ctx context.Context, arg GetUserWithTwoFactorParams) (GetUserWithTwoFactorRow, error) {
-	row := q.db.QueryRow(ctx, getUserWithTwoFactor, arg.Roles, arg.ID)
+	row := q.db.QueryRow(ctx, getUserWithTwoFactor, arg.Roles, arg.PrivilegedPermissions, arg.ID)
 	var i GetUserWithTwoFactorRow
 	err := row.Scan(
 		&i.AuthUser.ID,

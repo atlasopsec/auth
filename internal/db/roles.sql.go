@@ -21,6 +21,32 @@ func (q *Queries) DeleteUserRole(ctx context.Context, userID uuid.UUID) error {
 	return err
 }
 
+const getMembershipAccess = `-- name: GetMembershipAccess :one
+SELECT m.role, r.permissions AS custom_permissions
+FROM auth.memberships m
+LEFT JOIN auth.organization_roles r ON r.organization_id = m.organization_id AND r.id = m.custom_role_id
+WHERE m.organization_id = $1 AND m.user_id = $2
+`
+
+type GetMembershipAccessParams struct {
+	OrganizationID uuid.UUID
+	UserID         uuid.UUID
+}
+
+type GetMembershipAccessRow struct {
+	Role              string
+	CustomPermissions []string
+}
+
+// A member's role in an organization and, for a role the organization
+// defined, its permissions (NULL for roles defined in code).
+func (q *Queries) GetMembershipAccess(ctx context.Context, arg GetMembershipAccessParams) (GetMembershipAccessRow, error) {
+	row := q.db.QueryRow(ctx, getMembershipAccess, arg.OrganizationID, arg.UserID)
+	var i GetMembershipAccessRow
+	err := row.Scan(&i.Role, &i.CustomPermissions)
+	return i, err
+}
+
 const getMembershipRole = `-- name: GetMembershipRole :one
 SELECT role FROM auth.memberships WHERE organization_id = $1 AND user_id = $2
 `

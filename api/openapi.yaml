@@ -542,6 +542,9 @@ paths:
         Requires `members:manage`. You can only give a role whose
         permissions you all have, and only change the role of someone whose
         permissions you all have. Only owners can make or change owners.
+        `role` is a role defined in code, or the `key` of one of the
+        organization's own roles (`custom:<role id>`); another
+        organization's role is `422`.
       tags: [members]
       requestBody:
         required: true
@@ -580,6 +583,127 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/LastOwner" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /v1/organizations/{id}/roles:
+    parameters:
+      - { $ref: "#/components/parameters/OrganizationIDPath" }
+    get:
+      operationId: listOrganizationRoles
+      summary: The organization's own roles
+      description: >
+        The roles the organization defined, oldest first: at most 50, so
+        not paginated. Roles defined in code aren't listed. Requires
+        `members:read`.
+      tags: [roles]
+      responses:
+        "200":
+          description: The roles.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, next_cursor]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/OrganizationRole" }
+                  next_cursor: { type: "null" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+    post:
+      operationId: createOrganizationRole
+      summary: Create a role
+      description: >
+        Requires `roles:manage`. Permissions must be ones the app declares,
+        never `*`, and you must have every one of them yourself. Names are
+        unique in the organization regardless of case, and can't be the
+        name of a role defined in code.
+      tags: [roles]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [name, permissions]
+              properties:
+                name: { type: string, minLength: 1, maxLength: 100 }
+                permissions:
+                  type: array
+                  maxItems: 100
+                  items: { type: string, example: "invoices:read" }
+      responses:
+        "201":
+          description: The new role.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OrganizationRole" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/TooManyRoles" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /v1/organizations/{id}/roles/{role_id}:
+    parameters:
+      - { $ref: "#/components/parameters/OrganizationIDPath" }
+      - name: role_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    patch:
+      operationId: updateOrganizationRole
+      summary: Rename a role, or change its permissions
+      description: >
+        Requires `roles:manage`, and every permission the role has now and
+        will have. Members with the role get the change on their next
+        request. A role of another organization is `404`.
+      tags: [roles]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                name: { type: string, minLength: 1, maxLength: 100 }
+                permissions:
+                  type: array
+                  maxItems: 100
+                  items: { type: string }
+      responses:
+        "200":
+          description: The role.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OrganizationRole" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+    delete:
+      operationId: deleteOrganizationRole
+      summary: Delete a role
+      description: >
+        Requires `roles:manage` and every permission the role has. A role
+        that members have can't be deleted (`409 role_in_use`): give them
+        another role first.
+      tags: [roles]
+      responses:
+        "204": { description: Deleted. }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/RoleInUse" }
         "500": { $ref: "#/components/responses/InternalError" }
 
   /v1/organizations/{id}/invitations:
@@ -1271,6 +1395,25 @@ components:
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
 
+    OrganizationRole:
+      type: object
+      required: [id, key, name, permissions, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        key:
+          type: string
+          description: The role as members have it, and as it's given to them.
+          example: "custom:01933b6e-8f1a-7c3e-9a4b-2f6d8e0c1a5b"
+        name: { type: string }
+        permissions:
+          type: array
+          items: { type: string }
+          description: >
+            What the role grants: the permissions it was given that the app
+            still declares.
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
     Invitation:
       type: object
       required: [id, email, role, invited_by, expires_at, created_at]
@@ -1521,6 +1664,16 @@ components:
           schema: { $ref: "#/components/schemas/Error" }
     LastOwner:
       description: "`last_owner`: the organization would be left without an owner."
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    RoleInUse:
+      description: "`role_in_use`: members have the role."
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    TooManyRoles:
+      description: "`too_many_roles`: the organization already has 50 roles of its own."
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }

@@ -27,7 +27,7 @@ type twoFactorState struct {
 // userWithTwoFactor reads a user and their 2FA rules. It returns
 // pgx.ErrNoRows, wrapped, if the user doesn't exist.
 func (a *Auth) userWithTwoFactor(ctx context.Context, q *db.Queries, userID uuid.UUID) (db.AuthUser, twoFactorState, error) {
-	row, err := q.GetUserWithTwoFactor(ctx, db.GetUserWithTwoFactorParams{ID: userID, Roles: a.twoFactorRoles})
+	row, err := q.GetUserWithTwoFactor(ctx, db.GetUserWithTwoFactorParams{ID: userID, Roles: a.twoFactorRoles, PrivilegedPermissions: a.privilegedPerms})
 	if err != nil {
 		return db.AuthUser{}, twoFactorState{}, fmt.Errorf("reading user: %w", err)
 	}

@@ -58,9 +58,10 @@ func (q *Queries) ListOwnedOrganizationIDs(ctx context.Context, arg ListOwnedOrg
 }
 
 const upsertMembership = `-- name: UpsertMembership :exec
-INSERT INTO auth.memberships (id, organization_id, user_id, role, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, $5)
-ON CONFLICT (organization_id, user_id) DO UPDATE SET role = excluded.role, updated_at = excluded.updated_at
+INSERT INTO auth.memberships (id, organization_id, user_id, role, custom_role_id, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $6)
+ON CONFLICT (organization_id, user_id) DO UPDATE
+SET role = excluded.role, custom_role_id = excluded.custom_role_id, updated_at = excluded.updated_at
 `
 
 type UpsertMembershipParams struct {
@@ -68,6 +69,7 @@ type UpsertMembershipParams struct {
 	OrganizationID uuid.UUID
 	UserID         uuid.UUID
 	Role           string
+	CustomRoleID   *uuid.UUID
 	Now            time.Time
 }
 
@@ -77,6 +79,7 @@ func (q *Queries) UpsertMembership(ctx context.Context, arg UpsertMembershipPara
 		arg.OrganizationID,
 		arg.UserID,
 		arg.Role,
+		arg.CustomRoleID,
 		arg.Now,
 	)
 	return err

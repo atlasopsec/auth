@@ -66,6 +66,7 @@ type AuthMembership struct {
 	Role           string
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
+	CustomRoleID   *uuid.UUID
 }
 
 type AuthOauthAccount struct {
@@ -99,6 +100,15 @@ type AuthOrganization struct {
 	Name      string
 	CreatedAt time.Time
 	UpdatedAt time.Time
+}
+
+type AuthOrganizationRole struct {
+	ID             uuid.UUID
+	OrganizationID uuid.UUID
+	Name           string
+	Permissions    []string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 type AuthRateLimit struct {

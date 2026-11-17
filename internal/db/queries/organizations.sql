@@ -4,8 +4,8 @@ VALUES (@id, @name, @now, @now)
 RETURNING *;
 
 -- name: CreateMembership :exec
-INSERT INTO auth.memberships (id, organization_id, user_id, role, created_at, updated_at)
-VALUES (@id, @organization_id, @user_id, @role, @now, @now);
+INSERT INTO auth.memberships (id, organization_id, user_id, role, custom_role_id, created_at, updated_at)
+VALUES (@id, @organization_id, @user_id, @role, sqlc.narg(custom_role_id), @now, @now);
 
 -- name: GetMemberOrganization :one
 SELECT o.id, o.name, o.created_at, o.updated_at, m.role
@@ -48,7 +48,7 @@ SELECT count(*) FROM auth.memberships WHERE organization_id = @organization_id A
 SELECT * FROM auth.memberships WHERE organization_id = @organization_id AND user_id = @user_id;
 
 -- name: SetMembershipRole :exec
-UPDATE auth.memberships SET role = @role, updated_at = @now
+UPDATE auth.memberships SET role = @role, custom_role_id = sqlc.narg(custom_role_id), updated_at = @now
 WHERE organization_id = @organization_id AND user_id = @user_id;
 
 -- name: DeleteMembership :exec

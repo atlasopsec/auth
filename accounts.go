@@ -33,7 +33,8 @@ var (
 	ErrUserNotFound = errors.New("auth: no such user")
 	// ErrOrganizationNotFound means there's no organization with the ID.
 	ErrOrganizationNotFound = errors.New("auth: no such organization")
-	// ErrUnknownRole means a role isn't one of Config.OrgRoles.
+	// ErrUnknownRole means a role isn't one of Config.OrgRoles or, for a
+	// role key from CustomRoleKey, one of the organization's own roles.
 	ErrUnknownRole = errors.New("auth: unknown organization role")
 	// ErrLastOwner means a change would leave an organization without an
 	// owner. Make someone else an owner first.
@@ -267,8 +268,8 @@ func (a *Auth) EndSessions(ctx context.Context, userID uuid.UUID, by Actor) erro
 }
 
 // SetMemberRole makes a user a member of an organization with role, or
-// changes the role of a member, from code. role must be one of
-// Config.OrgRoles. It's for projects moving memberships from another
+// changes the role of a member, from code. role is one of Config.OrgRoles,
+// or the Key of one of the organization's own roles (CustomRoleKey). It's for projects moving memberships from another
 // system, and for admin tooling: unlike the members endpoints, it doesn't
 // check what the caller may grant, so never pass it a role straight from a
 // user's request. Demoting the last owner returns ErrLastOwner. Setting
@@ -278,11 +279,19 @@ func (a *Auth) SetMemberRole(ctx context.Context, orgID, userID uuid.UUID, role 
 	if a.orgRoles == nil {
 		return errors.New("auth: SetMemberRole needs Config.OrgRoles")
 	}
-	if !a.orgRoles.Defines(role) {
+	if _, custom := customRoleID(role); !custom && !a.orgRoles.Defines(role) {
 		return ErrUnknownRole
 	}
 	var oldRole string
 	err := a.withOrgLock(ctx, orgID, func(q *db.Queries) error {
+		next, err := a.roleByKey(ctx, q, orgID, role)
+		if err != nil {
+			return err
+		}
+		if !next.defined {
+			// Another organization's role, or one that doesn't exist.
+			return ErrUnknownRole
+		}
 		m, err := q.GetMembership(ctx, db.GetMembershipParams{OrganizationID: orgID, UserID: userID})
 		switch {
 		case errors.Is(err, pgx.ErrNoRows):
@@ -304,7 +313,7 @@ func (a *Auth) SetMemberRole(ctx context.Context, orgID, userID uuid.UUID, role 
 			return fmt.Errorf("generating membership ID: %w", err)
 		}
 		err = q.UpsertMembership(ctx, db.UpsertMembershipParams{
-			ID: id, OrganizationID: orgID, UserID: userID, Role: role, Now: a.now().UTC().Truncate(time.Microsecond),
+			ID: id, OrganizationID: orgID, UserID: userID, Role: role, CustomRoleID: customRoleIDOf(next), Now: a.now().UTC().Truncate(time.Microsecond),
 		})
 		if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.ConstraintName == "memberships_user_id_fkey" {
 			return ErrUserNotFound
@@ -415,7 +424,7 @@ func (a *Auth) checkStoredHash(hash string) error {
 // exported errors pass through as they are, and a missing user (from a
 // lock or read that found no row) becomes ErrUserNotFound.
 func accountError(doing string, err error) error {
-	for _, known := range []error{ErrEmailTaken, ErrUserNotFound, ErrOrganizationNotFound, ErrLastOwner, ErrSignUpNotAllowed} {
+	for _, known := range []error{ErrEmailTaken, ErrUserNotFound, ErrOrganizationNotFound, ErrLastOwner, ErrSignUpNotAllowed, ErrUnknownRole} {
 		if errors.Is(err, known) {
 			return fmt.Errorf("auth: %s: %w", doing, known)
 		}

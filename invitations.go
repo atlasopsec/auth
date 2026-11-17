@@ -70,7 +70,7 @@ func (a *Auth) invite(w http.ResponseWriter, r *http.Request) {
 		writeValidationFailed(w, r, details)
 		return
 	}
-	if !a.mayAssign(c.org.Role, req.Role) {
+	if !mayAssign(c.role, a.codeRole(req.Role)) {
 		writeForbidden(w, r)
 		return
 	}
@@ -130,8 +130,8 @@ func (a *Auth) createInvitation(ctx context.Context, orgID, inviter uuid.UUID, e
 		inv db.AuthInvitation
 		tok string
 	)
-	err = a.changeMembers(ctx, orgID, func(q *db.Queries, actorRole string) error {
-		if !a.mayAssign(actorRole, role) {
+	err = a.changeMembers(ctx, orgID, func(q *db.Queries, actor orgRole) error {
+		if !mayAssign(actor, a.codeRole(role)) {
 			return errForbidden
 		}
 		now := a.now().UTC().Truncate(time.Microsecond)
@@ -143,7 +143,7 @@ func (a *Auth) createInvitation(ctx context.Context, orgID, inviter uuid.UUID, e
 		case now.Sub(prev.CreatedAt) < emailtoken.Cooldown:
 			inv = prev
 			return nil
-		case !a.mayAssign(actorRole, prev.Role):
+		case !mayAssign(actor, a.codeRole(prev.Role)):
 			return errForbidden
 		default:
 			if err := q.DeleteInvitation(ctx, prev.ID); err != nil {
@@ -221,7 +221,7 @@ func (a *Auth) cancelInvitation(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteInternalError(w, r, a.log, err)
 		return
 	}
-	if !a.mayAssign(c.org.Role, inv.Role) {
+	if !mayAssign(c.role, a.codeRole(inv.Role)) {
 		writeForbidden(w, r)
 		return
 	}
@@ -358,14 +358,14 @@ func (a *Auth) inviterStillMay(ctx context.Context, q *db.Queries, inv db.AuthIn
 	} else if err != nil {
 		return fmt.Errorf("locking organization: %w", err)
 	}
-	role, err := q.GetMembershipRole(ctx, db.GetMembershipRoleParams{OrganizationID: inv.OrganizationID, UserID: inv.InvitedBy})
+	role, err := a.memberRole(ctx, q, inv.OrganizationID, inv.InvitedBy)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return errInvitationInvalid
 	}
 	if err != nil {
 		return fmt.Errorf("reading inviter's role: %w", err)
 	}
-	if !a.orgCan(role, PermMembersManage) || !a.mayAssign(role, inv.Role) {
+	if !role.can(PermMembersManage) || !mayAssign(role, a.codeRole(inv.Role)) {
 		return errInvitationInvalid
 	}
 	return nil

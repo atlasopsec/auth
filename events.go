@@ -62,6 +62,13 @@ const (
 	// since the user no longer exists, and metadata "user_id" is their
 	// ID.
 	EventUserDeleted = "user_deleted"
+	// EventOrgRoleCreated, EventOrgRoleUpdated, and EventOrgRoleDeleted are
+	// changes to a role an organization defined. UserID is nil; ActorID is
+	// who made the change. Metadata "organization_id", "role" (its key),
+	// and, except for deletions, "permissions", comma-separated.
+	EventOrgRoleCreated = "org_role_created"
+	EventOrgRoleUpdated = "org_role_updated"
+	EventOrgRoleDeleted = "org_role_deleted"
 )
 
 // Event is one entry in the security event log. It never contains

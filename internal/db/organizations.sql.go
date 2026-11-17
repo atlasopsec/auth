@@ -29,8 +29,8 @@ func (q *Queries) CountOwners(ctx context.Context, arg CountOwnersParams) (int64
 }
 
 const createMembership = `-- name: CreateMembership :exec
-INSERT INTO auth.memberships (id, organization_id, user_id, role, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, $5)
+INSERT INTO auth.memberships (id, organization_id, user_id, role, custom_role_id, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $6)
 `
 
 type CreateMembershipParams struct {
@@ -38,6 +38,7 @@ type CreateMembershipParams struct {
 	OrganizationID uuid.UUID
 	UserID         uuid.UUID
 	Role           string
+	CustomRoleID   *uuid.UUID
 	Now            time.Time
 }
 
@@ -47,6 +48,7 @@ func (q *Queries) CreateMembership(ctx context.Context, arg CreateMembershipPara
 		arg.OrganizationID,
 		arg.UserID,
 		arg.Role,
+		arg.CustomRoleID,
 		arg.Now,
 	)
 	return err
@@ -124,7 +126,7 @@ func (q *Queries) GetMemberOrganization(ctx context.Context, arg GetMemberOrgani
 }
 
 const getMembership = `-- name: GetMembership :one
-SELECT id, organization_id, user_id, role, created_at, updated_at FROM auth.memberships WHERE organization_id = $1 AND user_id = $2
+SELECT id, organization_id, user_id, role, created_at, updated_at, custom_role_id FROM auth.memberships WHERE organization_id = $1 AND user_id = $2
 `
 
 type GetMembershipParams struct {
@@ -142,6 +144,7 @@ func (q *Queries) GetMembership(ctx context.Context, arg GetMembershipParams) (A
 		&i.Role,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.CustomRoleID,
 	)
 	return i, err
 }
@@ -278,12 +281,13 @@ func (q *Queries) RenameOrganization(ctx context.Context, arg RenameOrganization
 }
 
 const setMembershipRole = `-- name: SetMembershipRole :exec
-UPDATE auth.memberships SET role = $1, updated_at = $2
-WHERE organization_id = $3 AND user_id = $4
+UPDATE auth.memberships SET role = $1, custom_role_id = $2, updated_at = $3
+WHERE organization_id = $4 AND user_id = $5
 `
 
 type SetMembershipRoleParams struct {
 	Role           string
+	CustomRoleID   *uuid.UUID
 	Now            time.Time
 	OrganizationID uuid.UUID
 	UserID         uuid.UUID
@@ -292,6 +296,7 @@ type SetMembershipRoleParams struct {
 func (q *Queries) SetMembershipRole(ctx context.Context, arg SetMembershipRoleParams) error {
 	_, err := q.db.Exec(ctx, setMembershipRole,
 		arg.Role,
+		arg.CustomRoleID,
 		arg.Now,
 		arg.OrganizationID,
 		arg.UserID,

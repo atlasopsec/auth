@@ -4,6 +4,23 @@ What changed in each release of `github.com/atlasopsec/auth`. The Next.js templa
 
 The exported Go API and the HTTP endpoints follow [semantic versioning](https://semver.org): a minor release only adds, and anything removed or changed waits for the next major version.
 
+## Unreleased (v1.9.0)
+
+Roles each organization defines. **Run `Migrate` before deploying:** migrations `00014` (a new table, and a nullable column and constraints on `auth.memberships`, added `NOT VALID` then validated) and `00015` (an index built `CONCURRENTLY`). Neither changes existing rows. See [docs/api.md §15](docs/api.md).
+
+### Added
+
+- `GET`, `POST /v1/organizations/{id}/roles` and `PATCH`, `DELETE /v1/organizations/{id}/roles/{role_id}`: an organization's own roles, built from the permissions the project declares. They need the new `roles:manage` permission (`PermRolesManage`), and every permission in the role, before and after a change.
+- `PATCH /v1/organizations/{id}/members/{user_id}` and `SetMemberRole` take a custom role's key, `custom:<id>`.
+- `CreateOrgRole`, `UpdateOrgRole`, `DeleteOrgRole`, `ListOrgRoles`, `OrgRole`, `OrgRoleChanges`, and `CustomRoleKey`.
+- The errors `ErrRoleNotFound`, `ErrRoleInUse`, `ErrInvalidRoleName`, `ErrRoleNameTaken`, `ErrUndeclaredPermission`, and `ErrTooManyRoles`, and the error codes `role_in_use` and `too_many_roles` (`409`).
+- The events `org_role_created`, `org_role_updated`, and `org_role_deleted`.
+
+### Changed
+
+- With `Config.TwoFactorRoles`, a custom role with a permission only privileged roles have counts as privileged.
+- `Org.Role` and the `role` in API responses can be a custom role's key. Code that checks permissions with `Can`, as §7 asks, needs no change.
+
 ## Unreleased (v1.8.0)
 
 Importing two-factor. No migrations. See [docs/api.md §14](docs/api.md).
