@@ -4,7 +4,7 @@ What changed in each release of `github.com/atlasopsec/auth`. The Next.js templa
 
 The exported Go API and the HTTP endpoints follow [semantic versioning](https://semver.org): a minor release only adds, and anything removed or changed waits for the next major version.
 
-## Unreleased (v1.7.0)
+## v1.7.0
 
 Older password hashes, opt-in. No migrations. See [docs/api.md §13](docs/api.md).
 
@@ -17,7 +17,7 @@ Older password hashes, opt-in. No migrations. See [docs/api.md §13](docs/api.md
 
 - The hash upgrade at login no longer overwrites a password that was changed between the check and the upgrade.
 
-## Unreleased (v1.6.0)
+## v1.6.0
 
 Managing accounts from code, for projects moving their accounts in from another system or running them from their own admin tools. No migrations. See [docs/api.md §12](docs/api.md).
 
