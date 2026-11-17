@@ -4,6 +4,12 @@ What changed in each release of `github.com/atlasopsec/auth`. The Next.js templa
 
 The exported Go API and the HTTP endpoints follow [semantic versioning](https://semver.org): a minor release only adds, and anything removed or changed waits for the next major version.
 
+## v1.10.1
+
+### Fixed
+
+- **`Migrate` could fail with `deadlock detected` when several instances started at once,** while another was applying a migration that builds an index `CONCURRENTLY` (`00012`, `00015`). A starting instance waited for the migration lock inside a transaction, and the index build waits for every open transaction to end. Creating the schema now has a lock of its own, so it no longer waits for a running migration. Restarting the instance that failed was enough to recover, and nothing was left half-applied.
+
 ## v1.10.0
 
 Accounts managed elsewhere. No migrations. See [docs/api.md §16](docs/api.md).
