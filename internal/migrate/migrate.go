@@ -25,11 +25,18 @@ const Schema = "auth"
 // it never clashes with the project's own goose_db_version table.
 const versionTable = Schema + ".goose_db_version"
 
-// migrateLockID is the Postgres advisory lock held while migrating, so
-// several API instances starting at once apply migrations one at a time.
-// It's distinct from goose's default lock ID, so the module's migrations
-// and the project's own never block each other.
-const migrateLockID int64 = 0x617574686d6967 // "authmig"
+// LockID is the Postgres advisory lock held while migrating, so several
+// API instances starting at once apply migrations one at a time. It's
+// distinct from goose's default lock ID, so the module's migrations and the
+// project's own never block each other.
+const LockID int64 = 0x617574686d6967 // "authmig"
+
+// schemaLockID serializes creating the auth schema. It's a lock of its own,
+// held only for the moment that takes, so an instance starting while
+// another is migrating doesn't wait for the migration inside a
+// transaction. A migration that builds an index CONCURRENTLY waits for
+// every open transaction to end, so the two would wait for each other.
+const schemaLockID int64 = 0x61757468736368 // "authsch"
 
 // Run creates the auth schema if needed and applies any pending migrations.
 // It's idempotent and safe to call from several instances at once.
@@ -68,7 +75,7 @@ func run(ctx context.Context, pool *pgxpool.Pool, up func(*goose.Provider) error
 		}
 	}()
 
-	locker, err := lock.NewPostgresSessionLocker(lock.WithLockID(migrateLockID))
+	locker, err := lock.NewPostgresSessionLocker(lock.WithLockID(LockID))
 	if err != nil {
 		return fmt.Errorf("auth: creating migration lock: %w", err)
 	}
@@ -98,10 +105,11 @@ func run(ctx context.Context, pool *pgxpool.Pool, up func(*goose.Provider) error
 
 // createSchema creates the auth schema. CREATE SCHEMA IF NOT EXISTS isn't
 // safe when run concurrently (two callers can both try to create it), so
-// it's done under a transaction-level advisory lock.
+// it's done under a transaction-level advisory lock: schemaLockID, never
+// LockID (see schemaLockID).
 func createSchema(ctx context.Context, pool *pgxpool.Pool) error {
 	err := pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", migrateLockID); err != nil {
+		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", schemaLockID); err != nil {
 			return err
 		}
 		_, err := tx.Exec(ctx, "CREATE SCHEMA IF NOT EXISTS "+Schema)
