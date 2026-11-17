@@ -78,6 +78,10 @@ err := a.ResetTwoFactor(ctx, userID, a.ActorOf(r))
 
 There's no endpoint for it, on purpose.
 
+## Moving accounts in from another system
+
+A project moving onto the module copies its accounts in one way, through Go calls, never by writing to the `auth` schema: `CreateUser` and `UpdateUser` take existing password hashes (argon2id, or bcrypt with `Config.AllowBcryptHashes`), `SetMemberRole` sets memberships, and `ImportTwoFactor` brings 2FA along. While the other system still owns the accounts, `Config.AccountsManagedElsewhere` turns off the endpoints that would change them. See [docs/api.md §12–16](docs/api.md).
+
 ## Rate limits and cleanup
 
 The module rate-limits logins, sign-ups, emails, and sign-in starts per client IP, and emails per address, in Postgres, so every API instance shares the counts. Repeated wrong passwords slow down further attempts, growing to 15 minutes, but never lock an account. Limited requests get `429 rate_limited` with `Retry-After`. The limits are in [docs/api.md §10](docs/api.md).

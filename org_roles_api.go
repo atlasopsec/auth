@@ -355,6 +355,9 @@ func (a *Auth) ListOrgRoles(ctx context.Context, orgID uuid.UUID) ([]OrgRole, er
 
 func (a *Auth) registerOrgRoles(mux *http.ServeMux) {
 	mux.Handle("GET /v1/organizations/{id}/roles", endpoint(a.orgRoute(PermMembersRead, orgFromPath, http.HandlerFunc(a.listOrgRoles))))
+	if a.managedElsewhere {
+		return
+	}
 	mux.Handle("POST /v1/organizations/{id}/roles", endpoint(a.orgRoute(PermRolesManage, orgFromPath, http.HandlerFunc(a.createOrgRole))))
 	mux.Handle("PATCH /v1/organizations/{id}/roles/{role_id}", endpoint(a.orgRoute(PermRolesManage, orgFromPath, http.HandlerFunc(a.updateOrgRole))))
 	mux.Handle("DELETE /v1/organizations/{id}/roles/{role_id}", endpoint(a.orgRoute(PermRolesManage, orgFromPath, http.HandlerFunc(a.deleteOrgRole))))

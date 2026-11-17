@@ -4,6 +4,23 @@ What changed in each release of `github.com/atlasopsec/auth`. The Next.js templa
 
 The exported Go API and the HTTP endpoints follow [semantic versioning](https://semver.org): a minor release only adds, and anything removed or changed waits for the next major version.
 
+## Unreleased (v1.10.0)
+
+Accounts managed elsewhere. No migrations. See [docs/api.md §16](docs/api.md).
+
+### Added
+
+- `Config.AccountsManagedElsewhere` (off by default) turns off the endpoints that create or change accounts:
+  - sign-up and email verification;
+  - password change and reset, and email change;
+  - 2FA setup and turning it off;
+  - creating organizations, invitations, and changing and removing members;
+  - changing organization roles;
+  - linking and unlinking providers.
+
+  It's for projects whose accounts still live in another system and are copied in with the Go calls. Logging in, 2FA at login, recovery codes, sessions, and logging out keep working. Signing in with a provider works only for provider accounts already linked.
+- docs/api.md §17: the design for support access and break-glass, for later releases. The module never gains impersonation.
+
 ## Unreleased (v1.9.0)
 
 Roles each organization defines. **Run `Migrate` before deploying:** migrations `00014` (a new table, and a nullable column and constraints on `auth.memberships`, added `NOT VALID` then validated) and `00015` (an index built `CONCURRENTLY`). Neither changes existing rows. See [docs/api.md §15](docs/api.md).
