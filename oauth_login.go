@@ -93,8 +93,10 @@ func (a *Auth) registerOAuth(mux *http.ServeMux) {
 	mux.Handle("POST /v1/oauth-flows/complete", endpoint(a.limitIP(limitLogin, http.HandlerFunc(a.completeOAuthFlow))))
 	mux.Handle("POST /v1/apple-sign-ins", endpoint(a.limitIP(limitLogin, http.HandlerFunc(a.appleSignIn))))
 	mux.Handle("GET /v1/users/me/oauth-accounts", endpoint(a.Authenticated(http.HandlerFunc(a.listOAuthAccounts))))
-	mux.Handle("POST /v1/users/me/oauth-accounts", endpoint(a.Authenticated(a.limitIP(limitOAuthStart, http.HandlerFunc(a.startLink)))))
-	mux.Handle("DELETE /v1/users/me/oauth-accounts/{id}", endpoint(a.Authenticated(http.HandlerFunc(a.unlink))))
+	if !a.managedElsewhere {
+		mux.Handle("POST /v1/users/me/oauth-accounts", endpoint(a.Authenticated(a.limitIP(limitOAuthStart, http.HandlerFunc(a.startLink)))))
+		mux.Handle("DELETE /v1/users/me/oauth-accounts/{id}", endpoint(a.Authenticated(http.HandlerFunc(a.unlink))))
+	}
 }
 
 // redirectURI is the web app page the provider sends the user back to.
@@ -249,6 +251,11 @@ func (a *Auth) completeOAuthFlow(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if flow.Purpose == "link" {
+		if a.managedElsewhere {
+			// Started before the setting was turned on.
+			writeForbidden(w, r)
+			return
+		}
 		a.finishLink(w, r, flow, id)
 		return
 	}
@@ -384,6 +391,10 @@ func (a *Auth) oauthLogInOnce(r *http.Request, provider string, id oauth.Identit
 			userID = acct.UserID
 		case !errors.Is(err, pgx.ErrNoRows):
 			return fmt.Errorf("reading OAuth account: %w", err)
+		case a.managedElsewhere:
+			// No account has this provider account linked. Creating one,
+			// or linking it to an account by email, would change accounts.
+			return ErrSignUpNotAllowed
 		case !id.EmailVerified:
 			return errOAuthEmailNotVerified
 		default:

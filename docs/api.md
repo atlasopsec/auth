@@ -1531,3 +1531,43 @@ auth.memberships          + custom_role_id (nullable)
 - A foreign key from `(organization_id, custom_role_id)` to `auth.organization_roles (organization_id, id)` means a member can only have a role of their own organization, and a role can't be deleted while anyone has it.
 - Nothing existing changes. Constraints are added `NOT VALID` and then validated, and the new index is built `CONCURRENTLY` (`00015`). The previous release, still running during a deploy, reads a custom role as one that's no longer defined, which grants nothing.
 - Deleting an organization deletes its roles.
+
+---
+
+## 16. Accounts managed elsewhere (v1.10.0)
+
+```go
+// Off by default.
+AccountsManagedElsewhere bool
+```
+
+For projects whose accounts still live in another system for a while, copied into the module one way with the Go calls in §12 and §14. Changes made through the module's own endpoints would be overwritten by the next copy, or would disagree with the other system, so they're turned off. Like `DisableOrganizationCreation`, the routes simply aren't registered.
+
+| Turned off | Still working |
+|---|---|
+| Sign-up (`POST /v1/users`) | Logging in (`POST /v1/sessions`) |
+| Email verification, both endpoints | 2FA at login (`POST /v1/two-factor-challenges/verify`) |
+| Password change and reset | New recovery codes (`POST /v1/users/me/two-factor/recovery-codes`) |
+| Email change, both endpoints | `GET /v1/users/me` |
+| 2FA setup, confirm, and turning it off | Sessions: list, end one, log out, log out everywhere |
+| Creating organizations | Reading organizations, members, and roles; renaming an organization |
+| Invitations, all of them | Signing in with a provider account that's already linked |
+| Changing and removing members, leaving included | Every Go call (`CreateUser`, `SetMemberRole`, `ImportTwoFactor`, ...) |
+| Creating, changing, and deleting organization roles | `Require`, `RequireOrg`, `Authenticated` on the project's own routes |
+| Linking and unlinking providers | |
+
+- **Signing in with a provider** works for provider accounts already linked to a user. Otherwise it would create an account or link one by email, so it's `403 sign_up_not_allowed`, the answer for a refused sign-up (§2).
+- **Recovery codes stay** because users moved in with `ImportTwoFactor` have none, and making them changes nothing the other system manages.
+- **Renaming an organization stays:** it isn't an account. A project that manages organization names elsewhere too doesn't give `organization:update` to anyone.
+- **Users who must have 2FA** (`TwoFactorRoles`, `SetTwoFactorRequired`) can't set it up themselves while this is on, so give them theirs with `ImportTwoFactor`, or they can only read `GET /v1/users/me` and log out.
+- **Turning it off later** brings every endpoint back. Nothing is stored.
+
+---
+
+## 17. Later: support access and break-glass (design only)
+
+Not built yet. Recorded so that nothing built now blocks them. **The module will never have impersonation:** no token or session is ever another user's.
+
+- **Support access (replaces impersonation).** An organization's owner grants someone with the project's support app role a time-limited, revocable membership, read-only by default. The support agent acts as themselves: their own session, their own ID in every event. It fits the existing model as a membership with an expiry and a grant, plus a role (a code role, or a custom one from §15) that limits it. Every check already goes through the membership and `orgRole` (§15), so an expired or revoked grant can be refused in one place.
+- **Break-glass.** Read-only support access without the owner's consent. It needs its own staff permission, a 2FA code from the last few minutes, a written reason, and a one-hour limit, and emails every owner at once. Second-person approval is a `Config` option, off by default. It builds on support access, with the reason and the approver in the event log.
+- **What the releases up to v1.10.0 keep open:** memberships are looked up per request, never stored in a session; every organization check goes through one function; events already record the actor separately from the user; and app roles (`Require`) already define who counts as support.

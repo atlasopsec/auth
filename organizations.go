@@ -123,11 +123,14 @@ func (a *Auth) registerOrganizations(mux *http.ServeMux) {
 	mux.Handle("GET /v1/organizations/{id}", endpoint(a.orgRoute("", orgFromPath, http.HandlerFunc(a.getOrganization))))
 	mux.Handle("PATCH /v1/organizations/{id}", endpoint(a.orgRoute(PermOrganizationUpdate, orgFromPath, http.HandlerFunc(a.renameOrganization))))
 	mux.Handle("GET /v1/organizations/{id}/members", endpoint(a.orgRoute(PermMembersRead, orgFromPath, http.HandlerFunc(a.listMembers))))
+	a.registerOrgRoles(mux)
+	if a.managedElsewhere {
+		return
+	}
 	mux.Handle("PATCH /v1/organizations/{id}/members/{user_id}", endpoint(a.orgRoute(PermMembersManage, orgFromPath, http.HandlerFunc(a.changeMemberRole))))
 	// Leaving needs no permission, so this checks it in the handler.
 	mux.Handle("DELETE /v1/organizations/{id}/members/{user_id}", endpoint(a.orgRoute("", orgFromPath, http.HandlerFunc(a.removeMember))))
 	a.registerInvitations(mux)
-	a.registerOrgRoles(mux)
 }
 
 type orgJSON struct {

@@ -113,6 +113,27 @@ type Config struct {
 	// the background. Call Auth.Cleanup on your own schedule instead.
 	DisableCleanup bool
 
+	// AccountsManagedElsewhere turns off the endpoints that create or
+	// change accounts, for projects whose accounts are still managed in
+	// another system and copied in with CreateUser, UpdateUser, and the
+	// other account management methods. Off by default. With it on:
+	//
+	//   - Gone: sign-up, email verification, password change and reset,
+	//     email change, 2FA setup and turning it off, creating
+	//     organizations, invitations, changing and removing members
+	//     (leaving included), and creating, changing, and deleting
+	//     organization roles. Linking and unlinking providers too.
+	//   - Signing in with a provider works only for provider accounts
+	//     already linked; anything else is 403 sign_up_not_allowed.
+	//   - Still working: logging in, 2FA at login, new recovery codes,
+	//     GET /v1/users/me, sessions, logging out, reading organizations,
+	//     members, and roles, renaming an organization, and every Go
+	//     method.
+	//
+	// Users who must have 2FA (TwoFactorRoles, SetTwoFactorRequired) can't
+	// set it up themselves, so give them theirs with ImportTwoFactor.
+	AccountsManagedElsewhere bool
+
 	// AllowBcryptHashes lets logins verify bcrypt password hashes ("$2a$",
 	// "$2b$", or "$2y$"), such as ones moved in from another system with
 	// CreateUser, and lets CreateUser and UpdateUser accept them. Off by
@@ -219,6 +240,8 @@ type Auth struct {
 	// it to wait for one.
 	afterCleanup       func()
 	disableOrgCreation bool
+	// managedElsewhere is Config.AccountsManagedElsewhere.
+	managedElsewhere bool
 	// bcryptDummy is set only with Config.AllowBcryptHashes.
 	bcryptDummy *password.BcryptDummy
 }
@@ -285,7 +308,8 @@ func New(cfg Config) (*Auth, error) {
 		twoFactorRoles:   append([]string(nil), cfg.TwoFactorRoles...),
 		privilegedPerms:  privilegedPermissions(cfg.OrgRoles, cfg.TwoFactorRoles),
 
-		disableOrgCreation: cfg.DisableOrganizationCreation,
+		disableOrgCreation: cfg.DisableOrganizationCreation || cfg.AccountsManagedElsewhere,
+		managedElsewhere:   cfg.AccountsManagedElsewhere,
 	}
 	if a.log == nil {
 		a.log = slog.Default()
