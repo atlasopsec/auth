@@ -25,6 +25,12 @@ Role names in responses. No migrations.
 
 - `role_name` next to `role` in organizations (`GET`, `POST /v1/organizations`, `GET`, `PATCH /v1/organizations/{id}`, and accepting an invitation) and members (`GET /v1/organizations/{id}/members`, `PATCH .../members/{user_id}`): the name of an organization's own role, or the role itself for one defined in code. Clients no longer need `GET /v1/organizations/{id}/roles` to show who has which role.
 
+## v1.10.1
+
+### Fixed
+
+- **`Migrate` could fail with `deadlock detected` when several instances started at once,** while another was applying a migration that builds an index `CONCURRENTLY` (`00012`, `00015`). A starting instance waited for the migration lock inside a transaction, and the index build waits for every open transaction to end. Creating the schema now has a lock of its own, so it no longer waits for a running migration. Restarting the instance that failed was enough to recover, and nothing was left half-applied.
+
 ## v1.10.0
 
 Accounts managed elsewhere. No migrations. See [docs/api.md §16](docs/api.md).
