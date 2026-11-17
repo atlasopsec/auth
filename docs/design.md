@@ -92,7 +92,7 @@ func listInvoices(w http.ResponseWriter, r *http.Request) {
 | `auth/mail` | Yes | The `Mailer` interface, `Message`, and `Writer` for local development |
 | `auth/mail/resend` | Yes | Resend adapter, in its own package so projects that don't use Resend don't pull it in |
 | `auth/mail/mailtest` | Yes | `Recorder`, a fake `Mailer` for tests |
-| `internal/password` | No | argon2id hashing, verification, re-hash detection, breached-password check |
+| `internal/password` | No | argon2id hashing, verification, re-hash detection, breached-password check; verifying bcrypt hashes |
 | `internal/token` | No | Random tokens, SHA-256 hashing, constant-time compare |
 | `internal/session` | No | Create, validate, extend, revoke sessions |
 | `internal/emailtoken` | No | Single-use email tokens (verify, reset, change email), with the send cooldown |
@@ -229,7 +229,7 @@ type Mailer interface {
 |---|---|
 | `github.com/jackc/pgx/v5` | Postgres driver (the stack standard) |
 | `github.com/pressly/goose/v3` | Running embedded migrations |
-| `golang.org/x/crypto` | argon2id |
+| `golang.org/x/crypto` | argon2id, and verifying bcrypt hashes moved in from other systems (api.md §13) |
 | `golang.org/x/oauth2` | OAuth flows |
 | `github.com/google/uuid` | UUIDv7 |
 | `github.com/resend/resend-go` | Only in `auth/mail/resend` |

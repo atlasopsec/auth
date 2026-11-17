@@ -17,6 +17,7 @@ import (
 	"github.com/atlasopsec/auth/internal/db"
 	"github.com/atlasopsec/auth/internal/emailtoken"
 	"github.com/atlasopsec/auth/internal/oauth"
+	"github.com/atlasopsec/auth/internal/password"
 	"github.com/atlasopsec/auth/internal/pwned"
 	"github.com/atlasopsec/auth/internal/ratelimit"
 	"github.com/atlasopsec/auth/internal/secretbox"
@@ -112,6 +113,24 @@ type Config struct {
 	// the background. Call Auth.Cleanup on your own schedule instead.
 	DisableCleanup bool
 
+	// AllowBcryptHashes lets logins verify bcrypt password hashes ("$2a$",
+	// "$2b$", or "$2y$"), such as ones moved in from another system with
+	// CreateUser, and lets CreateUser and UpdateUser accept them. Off by
+	// default. After a correct password the hash is replaced with an
+	// argon2id one, so once every user has logged in it can be turned off
+	// again. With it on, every password check, including for emails
+	// without an account, also does a bcrypt check's worth of work, so the
+	// time a login takes doesn't show which accounts exist or which kind of
+	// hash they have.
+	AllowBcryptHashes bool
+
+	// BcryptCost is the cost of the bcrypt hashes being moved in: the
+	// number after "$2b$", 4 to 15. Default: 10. Checks without a bcrypt
+	// hash do work at this cost, so a login with a hash at another cost
+	// takes a different time than one for an email without an account.
+	// Used only with AllowBcryptHashes.
+	BcryptCost int
+
 	// DisableNewDeviceEmails stops emailing users when they log in from a
 	// browser or app and network they haven't used in the last 90 days.
 	DisableNewDeviceEmails bool
@@ -197,6 +216,8 @@ type Auth struct {
 	// it to wait for one.
 	afterCleanup       func()
 	disableOrgCreation bool
+	// bcryptDummy is set only with Config.AllowBcryptHashes.
+	bcryptDummy *password.BcryptDummy
 }
 
 // breachChecker is implemented by *pwned.Checker, and faked in tests.
@@ -312,6 +333,20 @@ func New(cfg Config) (*Auth, error) {
 	}
 	if a.emails.NewDeviceLogin == nil {
 		a.emails.NewDeviceLogin = defaultNewDeviceLogin
+	}
+	if cfg.BcryptCost != 0 && !cfg.AllowBcryptHashes {
+		return nil, errors.New("auth: Config.BcryptCost is set, but Config.AllowBcryptHashes isn't")
+	}
+	if cfg.AllowBcryptHashes {
+		cost := cfg.BcryptCost
+		if cost == 0 {
+			cost = defaultBcryptCost
+		}
+		d, err := password.NewBcryptDummy(cost)
+		if err != nil {
+			return nil, fmt.Errorf("auth: Config.BcryptCost must be 4 to %d", password.MaxBcryptCost)
+		}
+		a.bcryptDummy = &d
 	}
 	if !cfg.DisableBreachCheck {
 		a.breach = pwned.New(pwned.DefaultURL)

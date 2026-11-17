@@ -1398,7 +1398,7 @@ type UserChanges struct {
 }
 ```
 
-- **Existing password hashes, never passwords.** `CreateUser` and `UpdateUser` take the hash the other system already has, so nobody has to handle the plain password. In this release it must be argon2id in the PHC form the module stores; a hash with other argon2id settings is upgraded to the module's at the user's next login (that already happened for the module's own older hashes). Anything else is `ErrInvalidPasswordHash`, which never contains the hash. An empty hash means no password: the user signs in with a provider, or adds one with a password reset.
+- **Existing password hashes, never passwords.** `CreateUser` and `UpdateUser` take the hash the other system already has, so nobody has to handle the plain password. It must be argon2id in the PHC form the module stores (or bcrypt, with the setting in §13); a hash with other argon2id settings is upgraded to the module's at the user's next login (that already happened for the module's own older hashes). Anything else is `ErrInvalidPasswordHash`, which never contains the hash. An empty hash means no password: the user signs in with a provider, or adds one with a password reset.
 - **Emails count as verified.** The project is vouching for the address, as when it moves accounts it has already verified. Addresses are checked like at sign-up and are unique regardless of case (`ErrInvalidEmail`, `ErrEmailTaken`).
 - **`CreateUser` runs `Hooks.OnUserCreated`** in its transaction, as sign-up does, so a project's own rows (a profile) exist for every user. If the hook fails, nothing is created and its error is returned.
 - **`UpdateUser` changes only what's different.** A new email or password hash ends the user's sessions, any login waiting for a 2FA code, and the links already emailed to them, as the module's own email and password changes do. A field that's nil, or already holds the value, changes nothing, so a sync can call it repeatedly. The module re-saves hashes at login (above), so the stored hash can differ from the one a project last gave: a sync should pass a hash only when it changed at the source.
@@ -1412,6 +1412,35 @@ type UserChanges struct {
 ### Creating organizations for an import (Decision)
 
 `CreateOrganization(ctx, name, ownerID, by)` already serves an import: users are created first, then each organization with one of its owners, then the other members with `SetMemberRole`. An organization without an owner would break the rule that every organization keeps one, which the module enforces everywhere else, so there's no way to create one. A project whose old system has organizations with nobody in an owner-like role picks one when it moves them.
+
+### Database
+
+No changes.
+
+---
+
+## 13. Older password hashes (v1.7.0)
+
+Systems a project moves away from often stored bcrypt hashes. `Config.AllowBcryptHashes` lets logins verify them, so users keep their passwords without the project ever seeing them.
+
+```go
+// Off by default.
+AllowBcryptHashes bool
+// The cost of the hashes being moved in, 4 to 15. Default 10.
+BcryptCost int
+```
+
+- **What's accepted:** `$2a$`, `$2b$`, and `$2y$` hashes (the same algorithm under the prefixes different libraries write), at cost 4 to 15. Higher costs are refused, as absurd argon2id settings are: a hash at cost 31 would tie up a server for hours. With the setting on, `CreateUser` and `UpdateUser` accept them; with it off they're `ErrInvalidPasswordHash`.
+- **Upgraded at the first correct password.** After a login with the right password, the hash is replaced with an argon2id one with the module's settings. This was already done for argon2id hashes with other settings, and still is. Once every moved user has logged in (no hash in `auth.users` starts with `$2`), the setting can go.
+- **The upgrade never undoes a change.** It replaces the hash only if it's still the one the password was checked against, so a login can't put back a password that `UpdateUser` or a reset changed meanwhile.
+- **No account enumeration (Decision).** With the setting off, a password check is exactly what it was. With it on, every check does one argon2id **and** one bcrypt check's worth of work: the real one for the kind of hash the account has, and a dummy for the other, or two dummies for an email without an account. Logins for argon2id accounts, bcrypt accounts, and unknown emails take the same time. The dummy bcrypt check runs at `BcryptCost`, so set it to the cost the moved hashes use; a hash at another cost takes a different time. Turning the setting on makes every login a little slower (one bcrypt check, about 50 ms at cost 10).
+- **Left over after turning it off:** a bcrypt hash still in the table is answered like a wrong password (and logged as a warning), not a `500`, so the user can recover with a password reset.
+- **Only the first 72 bytes count,** as in every bcrypt implementation, until the hash is upgraded.
+- **The auth standard** stores argon2id. A bcrypt hash is stored only between a move and that user's next login. That's the cost of not making every moved user reset their password.
+
+### Dependencies
+
+None new: bcrypt comes from `golang.org/x/crypto`, which the module already uses for argon2id.
 
 ### Database
 

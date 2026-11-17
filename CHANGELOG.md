@@ -4,6 +4,19 @@ What changed in each release of `github.com/atlasopsec/auth`. The Next.js templa
 
 The exported Go API and the HTTP endpoints follow [semantic versioning](https://semver.org): a minor release only adds, and anything removed or changed waits for the next major version.
 
+## Unreleased (v1.7.0)
+
+Older password hashes, opt-in. No migrations. See [docs/api.md §13](docs/api.md).
+
+### Added
+
+- `Config.AllowBcryptHashes` (off by default) and `Config.BcryptCost`: logins verify bcrypt hashes (`$2a$`, `$2b$`, `$2y$`, cost 4 to 15), and `CreateUser` and `UpdateUser` accept them. The hash is replaced with argon2id after the first correct password.
+- With the setting on, every password check does one argon2id and one bcrypt check's worth of work, so logins for either kind of account and for unknown emails take the same time. With it off, nothing changes.
+
+### Fixed
+
+- The hash upgrade at login no longer overwrites a password that was changed between the check and the upgrade.
+
 ## Unreleased (v1.6.0)
 
 Managing accounts from code, for projects moving their accounts in from another system or running them from their own admin tools. No migrations. See [docs/api.md §12](docs/api.md).
