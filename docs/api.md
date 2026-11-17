@@ -1495,7 +1495,7 @@ A role is returned as `{ id, key, name, permissions, created_at, updated_at }`. 
 - **Concurrent changes:** creating, changing, and deleting roles, and giving them out, all take the organization's lock and re-read the actor's role and the role's permissions under it. A change to a role and a hand-out of it at the same time are applied one after the other, each checked against what the other left.
 - **2FA can't be dodged with a copy.** With `Config.TwoFactorRoles`, a custom role is privileged (needs 2FA, 12-hour sessions) if it has any permission that only privileged roles in code have. Copying an admin's permissions into "Office admin" doesn't skip 2FA.
 - **Limits:** 50 roles per organization (`409 too_many_roles`), 100 permissions per role, names 1 to 100 characters.
-- **Invitations still use roles defined in code.** Invite with one, then give the member a custom role.
+- **Invitations can use custom roles (v1.12.0).** Invite with `{ "email", "role": "custom:<role id>" }`, under the same rules as giving the role to a member. When the invitation is accepted, the role is checked as it is then: if it was widened past what the inviter holds, or deleted, the link fails like an expired one (`422 token_invalid_or_expired`). Deleting a role cancels its pending invitations, so they never keep it in use. The database's foreign key keeps invitations to roles of their own organization, as for members (migrations `00016` and `00017`).
 
 ### Go
 

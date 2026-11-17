@@ -47,6 +47,7 @@ type AuthInvitation struct {
 	AcceptedAt     *time.Time
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
+	CustomRoleID   *uuid.UUID
 }
 
 type AuthLoginFailure struct {

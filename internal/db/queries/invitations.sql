@@ -7,9 +7,9 @@ DELETE FROM auth.invitations WHERE id = @id;
 
 -- name: CreateInvitation :one
 INSERT INTO auth.invitations (
-    id, organization_id, email, role, token_hash, invited_by, expires_at, created_at, updated_at
+    id, organization_id, email, role, custom_role_id, token_hash, invited_by, expires_at, created_at, updated_at
 ) VALUES (
-    @id, @organization_id, @email, @role, @token_hash, @invited_by, @expires_at, @now, @now
+    @id, @organization_id, @email, @role, sqlc.narg(custom_role_id), @token_hash, @invited_by, @expires_at, @now, @now
 )
 RETURNING *;
 
@@ -22,13 +22,17 @@ SELECT EXISTS (
 
 -- Invitation IDs are UUIDv7, so ordering by ID lists them oldest first, and
 -- the last ID on a page is the cursor for the next.
+-- role_name is the custom role's name, or the role itself for a role
+-- defined in code.
 -- name: ListPendingInvitations :many
-SELECT * FROM auth.invitations
-WHERE organization_id = @organization_id
-  AND accepted_at IS NULL
-  AND expires_at > @now
-  AND (sqlc.narg(after)::uuid IS NULL OR id > sqlc.narg(after)::uuid)
-ORDER BY id
+SELECT sqlc.embed(i), coalesce(r.name, i.role)::text AS role_name
+FROM auth.invitations i
+LEFT JOIN auth.organization_roles r ON r.organization_id = i.organization_id AND r.id = i.custom_role_id
+WHERE i.organization_id = @organization_id
+  AND i.accepted_at IS NULL
+  AND i.expires_at > @now
+  AND (sqlc.narg(after)::uuid IS NULL OR i.id > sqlc.narg(after)::uuid)
+ORDER BY i.id
 LIMIT @max_rows;
 
 -- name: GetPendingInvitationInOrganization :one

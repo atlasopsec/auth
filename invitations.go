@@ -33,13 +33,14 @@ type invitationJSON struct {
 	ID        uuid.UUID `json:"id"`
 	Email     string    `json:"email"`
 	Role      string    `json:"role"`
+	RoleName  string    `json:"role_name"`
 	InvitedBy uuid.UUID `json:"invited_by"`
 	ExpiresAt timestamp `json:"expires_at"`
 	CreatedAt timestamp `json:"created_at"`
 }
 
-func toInvitationJSON(r db.AuthInvitation) invitationJSON {
-	return invitationJSON{ID: r.ID, Email: r.Email, Role: r.Role, InvitedBy: r.InvitedBy, ExpiresAt: timestamp(r.ExpiresAt), CreatedAt: timestamp(r.CreatedAt)}
+func toInvitationJSON(r db.AuthInvitation, roleName string) invitationJSON {
+	return invitationJSON{ID: r.ID, Email: r.Email, Role: r.Role, RoleName: roleName, InvitedBy: r.InvitedBy, ExpiresAt: timestamp(r.ExpiresAt), CreatedAt: timestamp(r.CreatedAt)}
 }
 
 type inviteRequest struct {
@@ -63,14 +64,21 @@ func (a *Auth) invite(w http.ResponseWriter, r *http.Request) {
 	if fe, ok := checkEmail(req.Email); !ok {
 		details = append(details, fe)
 	}
-	if !a.orgRoles.Defines(req.Role) {
-		details = append(details, httpapi.FieldError{Field: "role", Code: "invalid_value", Message: "That isn't one of this app's roles."})
+	// A role defined in code, or one of this organization's own. The
+	// lookup filters by organization, so another's isn't found.
+	target, err := a.roleByKey(r.Context(), a.q, c.org.ID, req.Role)
+	if err != nil {
+		httpapi.WriteInternalError(w, r, a.log, err)
+		return
+	}
+	if !target.defined {
+		details = append(details, httpapi.FieldError{Field: "role", Code: "invalid_value", Message: "That isn't one of this organization's roles."})
 	}
 	if details != nil {
 		writeValidationFailed(w, r, details)
 		return
 	}
-	if !mayAssign(c.role, a.codeRole(req.Role)) {
+	if !mayAssign(c.role, target) {
 		writeForbidden(w, r)
 		return
 	}
@@ -93,6 +101,11 @@ func (a *Auth) invite(w http.ResponseWriter, r *http.Request) {
 	if a.writeMemberChangeError(w, r, err) {
 		return
 	}
+	roleName, err := a.roleName(ctx, a.q, c.org.ID, inv.Role)
+	if err != nil {
+		httpapi.WriteInternalError(w, r, a.log, err)
+		return
+	}
 	if tok != "" {
 		org, err := a.q.GetMemberOrganization(ctx, db.GetMemberOrganizationParams{OrganizationID: c.org.ID, UserID: c.user.ID})
 		if err != nil {
@@ -108,7 +121,7 @@ func (a *Auth) invite(w http.ResponseWriter, r *http.Request) {
 		}, inv.ID)
 		a.logEvent(r, "auth: member invited", c.user.ID)
 	}
-	httpapi.WriteJSON(w, r, http.StatusCreated, toInvitationJSON(inv))
+	httpapi.WriteJSON(w, r, http.StatusCreated, toInvitationJSON(inv, roleName))
 }
 
 // createInvitation replaces any pending invitation for the address with a
@@ -131,7 +144,16 @@ func (a *Auth) createInvitation(ctx context.Context, orgID, inviter uuid.UUID, e
 		tok string
 	)
 	err = a.changeMembers(ctx, orgID, func(q *db.Queries, actor orgRole) error {
-		if !mayAssign(actor, a.codeRole(role)) {
+		// Read again under the lock: a custom role may have been changed
+		// or deleted since.
+		target, err := a.roleByKey(ctx, q, orgID, role)
+		if err != nil {
+			return err
+		}
+		if !target.defined {
+			return errUnknownRole
+		}
+		if !mayAssign(actor, target) {
 			return errForbidden
 		}
 		now := a.now().UTC().Truncate(time.Microsecond)
@@ -143,9 +165,14 @@ func (a *Auth) createInvitation(ctx context.Context, orgID, inviter uuid.UUID, e
 		case now.Sub(prev.CreatedAt) < emailtoken.Cooldown:
 			inv = prev
 			return nil
-		case !mayAssign(actor, a.codeRole(prev.Role)):
-			return errForbidden
 		default:
+			prevRole, err := a.roleByKey(ctx, q, orgID, prev.Role)
+			if err != nil {
+				return err
+			}
+			if !mayAssign(actor, prevRole) {
+				return errForbidden
+			}
 			if err := q.DeleteInvitation(ctx, prev.ID); err != nil {
 				return fmt.Errorf("replacing invitation: %w", err)
 			}
@@ -157,6 +184,7 @@ func (a *Auth) createInvitation(ctx context.Context, orgID, inviter uuid.UUID, e
 			OrganizationID: orgID,
 			Email:          email,
 			Role:           role,
+			CustomRoleID:   customRoleIDOf(target),
 			TokenHash:      token.Hash(tok),
 			InvitedBy:      inviter,
 			ExpiresAt:      now.Add(InvitationLifetime),
@@ -194,11 +222,11 @@ func (a *Auth) listInvitations(w http.ResponseWriter, r *http.Request) {
 	list := invitationList{Data: []invitationJSON{}}
 	for i, row := range rows {
 		if i == int(limit) {
-			next := base64.RawURLEncoding.EncodeToString(rows[i-1].ID[:])
+			next := base64.RawURLEncoding.EncodeToString(rows[i-1].AuthInvitation.ID[:])
 			list.NextCursor = &next
 			break
 		}
-		list.Data = append(list.Data, toInvitationJSON(row))
+		list.Data = append(list.Data, toInvitationJSON(row.AuthInvitation, row.RoleName))
 	}
 	httpapi.WriteJSON(w, r, http.StatusOK, list)
 }
@@ -221,7 +249,12 @@ func (a *Auth) cancelInvitation(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteInternalError(w, r, a.log, err)
 		return
 	}
-	if !mayAssign(c.role, a.codeRole(inv.Role)) {
+	role, err := a.roleByKey(r.Context(), a.q, c.org.ID, inv.Role)
+	if err != nil {
+		httpapi.WriteInternalError(w, r, a.log, err)
+		return
+	}
+	if !mayAssign(c.role, role) {
 		writeForbidden(w, r)
 		return
 	}
@@ -294,9 +327,7 @@ func (a *Auth) accept(ctx context.Context, tok string, u User) (orgJSON, uuid.UU
 		return orgJSON{}, uuid.UUID{}, fmt.Errorf("finding invitation: %w", err)
 	}
 	now := a.now().UTC().Truncate(time.Microsecond)
-	// A role removed from code since the invitation was sent grants
-	// nothing, so the invitation is no use.
-	if inv.AcceptedAt != nil || !now.Before(inv.ExpiresAt) || !a.orgRoles.Defines(inv.Role) {
+	if inv.AcceptedAt != nil || !now.Before(inv.ExpiresAt) {
 		return orgJSON{}, uuid.UUID{}, errInvitationInvalid
 	}
 	if !strings.EqualFold(inv.Email, u.Email) {
@@ -317,7 +348,8 @@ func (a *Auth) accept(ctx context.Context, tok string, u User) (orgJSON, uuid.UU
 	// After Commit this is a no-op.
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 	q := db.New(tx)
-	if err := a.inviterStillMay(ctx, q, inv); err != nil {
+	role, err := a.inviterStillMay(ctx, q, inv)
+	if err != nil {
 		return orgJSON{}, uuid.UUID{}, err
 	}
 	n, err := q.AcceptInvitation(ctx, db.AcceptInvitationParams{ID: inv.ID, Now: &now})
@@ -329,7 +361,7 @@ func (a *Auth) accept(ctx context.Context, tok string, u User) (orgJSON, uuid.UU
 		return orgJSON{}, uuid.UUID{}, errInvitationInvalid
 	}
 	err = q.CreateMembership(ctx, db.CreateMembershipParams{
-		ID: membershipID, OrganizationID: inv.OrganizationID, UserID: u.ID, Role: inv.Role, Now: now,
+		ID: membershipID, OrganizationID: inv.OrganizationID, UserID: u.ID, Role: inv.Role, CustomRoleID: customRoleIDOf(role), Now: now,
 	})
 	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == "23505" && pgErr.ConstraintName == "memberships_organization_user_key" {
 		return orgJSON{}, uuid.UUID{}, errAlreadyMember
@@ -347,26 +379,36 @@ func (a *Auth) accept(ctx context.Context, tok string, u User) (orgJSON, uuid.UU
 	return toOrgJSON(Organization{ID: row.ID, Name: row.Name, CreatedAt: row.CreatedAt.UTC(), UpdatedAt: row.UpdatedAt.UTC()}, row.Role, row.RoleName), inv.InvitedBy, nil
 }
 
-// inviterStillMay returns errInvitationInvalid unless whoever sent inv is
-// still a member who could send it now. An invitation from someone since
-// removed or demoted would otherwise still let a person in with a role the
-// organization has taken away from its sender. It holds the organization's
-// lock, so it can't miss a member change made at the same time.
-func (a *Auth) inviterStillMay(ctx context.Context, q *db.Queries, inv db.AuthInvitation) error {
+// inviterStillMay returns the role inv gives, as it is now, or
+// errInvitationInvalid unless whoever sent inv is still a member who could
+// send it now. An invitation from someone since removed or demoted would
+// otherwise still let a person in with a role the organization has taken
+// away from its sender. So would one for a custom role widened since, past
+// what its sender holds. A role removed from code, or deleted, grants
+// nothing, so its invitation is no use either. It holds the organization's
+// lock, so it can't miss a change made at the same time.
+func (a *Auth) inviterStillMay(ctx context.Context, q *db.Queries, inv db.AuthInvitation) (orgRole, error) {
 	if _, err := q.LockOrganization(ctx, inv.OrganizationID); errors.Is(err, pgx.ErrNoRows) {
-		return errInvitationInvalid
+		return orgRole{}, errInvitationInvalid
 	} else if err != nil {
-		return fmt.Errorf("locking organization: %w", err)
+		return orgRole{}, fmt.Errorf("locking organization: %w", err)
 	}
-	role, err := a.memberRole(ctx, q, inv.OrganizationID, inv.InvitedBy)
+	target, err := a.roleByKey(ctx, q, inv.OrganizationID, inv.Role)
+	if err != nil {
+		return orgRole{}, err
+	}
+	if !target.defined {
+		return orgRole{}, errInvitationInvalid
+	}
+	inviter, err := a.memberRole(ctx, q, inv.OrganizationID, inv.InvitedBy)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return errInvitationInvalid
+		return orgRole{}, errInvitationInvalid
 	}
 	if err != nil {
-		return fmt.Errorf("reading inviter's role: %w", err)
+		return orgRole{}, fmt.Errorf("reading inviter's role: %w", err)
 	}
-	if !role.can(PermMembersManage) || !mayAssign(role, a.codeRole(inv.Role)) {
-		return errInvitationInvalid
+	if !inviter.can(PermMembersManage) || !mayAssign(inviter, target) {
+		return orgRole{}, errInvitationInvalid
 	}
-	return nil
+	return target, nil
 }
