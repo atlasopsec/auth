@@ -268,6 +268,25 @@ func (q *Queries) GetTwoFactorChallengeUser(ctx context.Context, tokenHash []byt
 	return user_id, err
 }
 
+const importTOTPSecret = `-- name: ImportTOTPSecret :exec
+INSERT INTO auth.totp_secrets (user_id, secret_encrypted, last_used_step, confirmed_at, created_at, updated_at)
+VALUES ($1, $2, 0, $3, $3, $3)
+ON CONFLICT (user_id) DO UPDATE
+SET secret_encrypted = excluded.secret_encrypted, last_used_step = 0, confirmed_at = excluded.confirmed_at, updated_at = excluded.updated_at
+`
+
+type ImportTOTPSecretParams struct {
+	UserID          uuid.UUID
+	SecretEncrypted []byte
+	Now             *time.Time
+}
+
+// Sets a confirmed secret made elsewhere, replacing any the user had.
+func (q *Queries) ImportTOTPSecret(ctx context.Context, arg ImportTOTPSecretParams) error {
+	_, err := q.db.Exec(ctx, importTOTPSecret, arg.UserID, arg.SecretEncrypted, arg.Now)
+	return err
+}
+
 const nthRecentTwoFactorFailure = `-- name: NthRecentTwoFactorFailure :one
 SELECT created_at FROM auth.two_factor_failures
 WHERE user_id = $1 AND created_at > $2

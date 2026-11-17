@@ -4,6 +4,15 @@ What changed in each release of `github.com/atlasopsec/auth`. The Next.js templa
 
 The exported Go API and the HTTP endpoints follow [semantic versioning](https://semver.org): a minor release only adds, and anything removed or changed waits for the next major version.
 
+## v1.8.0
+
+Importing two-factor. No migrations. See [docs/api.md §14](docs/api.md).
+
+### Added
+
+- `ImportTwoFactor`: turns on a user's 2FA with a TOTP secret from another system (base32, 128 to 512 bits), encrypted with `Config.EncryptionKey`. It ends their sessions, and importing the same secret again changes nothing. Recovery codes aren't imported.
+- The errors `ErrInvalidTwoFactorSecret` and `ErrEmailNotVerified`.
+
 ## v1.7.0
 
 Older password hashes, opt-in. No migrations. See [docs/api.md §13](docs/api.md).
