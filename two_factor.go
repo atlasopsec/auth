@@ -12,7 +12,6 @@ import (
 
 	"github.com/atlasopsec/auth/internal/db"
 	"github.com/atlasopsec/auth/internal/httpapi"
-	"github.com/atlasopsec/auth/internal/password"
 	"github.com/atlasopsec/auth/internal/recoverycode"
 	"github.com/atlasopsec/auth/internal/totp"
 )
@@ -47,7 +46,7 @@ func (a *Auth) checkPassword(ctx context.Context, userID uuid.UUID, pw string) (
 	if row.PasswordHash == nil {
 		return false, errPasswordNotSet
 	}
-	ok, err := password.Verify(pw, *row.PasswordHash)
+	ok, err := a.verifyPassword(ctx, row.ID, pw, row.PasswordHash)
 	if err != nil {
 		return false, fmt.Errorf("verifying password for user %s: %w", row.ID, err)
 	}

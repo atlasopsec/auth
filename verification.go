@@ -14,7 +14,6 @@ import (
 	"github.com/atlasopsec/auth/internal/db"
 	"github.com/atlasopsec/auth/internal/emailtoken"
 	"github.com/atlasopsec/auth/internal/httpapi"
-	"github.com/atlasopsec/auth/internal/password"
 	"github.com/atlasopsec/auth/internal/session"
 )
 
@@ -101,10 +100,8 @@ func (a *Auth) confirmVerification(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ok := false
-	if row.PasswordHash == nil {
-		password.SimulateVerify(req.Password)
-	} else if ok, err = password.Verify(req.Password, *row.PasswordHash); err != nil {
+	ok, err := a.verifyPassword(ctx, row.ID, req.Password, row.PasswordHash)
+	if err != nil {
 		httpapi.WriteInternalError(w, r, a.log, fmt.Errorf("verifying password for user %s: %w", row.ID, err))
 		return
 	}

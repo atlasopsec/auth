@@ -37,3 +37,9 @@ WHERE u.id = @id;
 
 -- name: SetTwoFactorRequired :execrows
 UPDATE auth.users SET two_factor_required = @required, updated_at = @now WHERE id = @id;
+
+-- Replaces a hash only if it's still the one the password was checked
+-- against, so an upgrade at login can't undo a change made meanwhile.
+-- name: RehashPassword :execrows
+UPDATE auth.users SET password_hash = @new_hash, updated_at = @now
+WHERE id = @id AND password_hash = @old_hash;

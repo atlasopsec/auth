@@ -47,8 +47,10 @@ type NewUser struct {
 	Email string
 	// PasswordHash is the user's existing password hash, such as one from
 	// the system they're moving from, in the encoded form the module
-	// stores: "$argon2id$v=19$m=…,t=…,p=…$<salt>$<hash>". A hash made with
-	// other argon2id settings is upgraded at the user's next login. Leave
+	// stores: "$argon2id$v=19$m=…,t=…,p=…$<salt>$<hash>", or, with
+	// Config.AllowBcryptHashes, a bcrypt hash ("$2a$", "$2b$", or "$2y$").
+	// Either is replaced with an argon2id hash with the module's settings
+	// at the user's next login. Leave
 	// it empty for a user without a password, who signs in with a provider
 	// or sets one with a password reset.
 	PasswordHash string
@@ -397,6 +399,12 @@ func (a *Auth) endAccess(ctx context.Context, tx pgx.Tx, userID uuid.UUID) error
 // checkStoredHash checks a password hash given to CreateUser or
 // UpdateUser is one the module can verify.
 func (a *Auth) checkStoredHash(hash string) error {
+	if password.IsBcrypt(hash) {
+		if a.bcryptDummy == nil || password.CheckBcrypt(hash) != nil {
+			return ErrInvalidPasswordHash
+		}
+		return nil
+	}
 	if password.CheckHash(hash) != nil {
 		return ErrInvalidPasswordHash
 	}

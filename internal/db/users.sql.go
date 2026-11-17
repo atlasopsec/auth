@@ -141,6 +141,33 @@ func (q *Queries) MarkEmailVerified(ctx context.Context, arg MarkEmailVerifiedPa
 	return err
 }
 
+const rehashPassword = `-- name: RehashPassword :execrows
+UPDATE auth.users SET password_hash = $1, updated_at = $2
+WHERE id = $3 AND password_hash = $4
+`
+
+type RehashPasswordParams struct {
+	NewHash *string
+	Now     time.Time
+	ID      uuid.UUID
+	OldHash *string
+}
+
+// Replaces a hash only if it's still the one the password was checked
+// against, so an upgrade at login can't undo a change made meanwhile.
+func (q *Queries) RehashPassword(ctx context.Context, arg RehashPasswordParams) (int64, error) {
+	result, err := q.db.Exec(ctx, rehashPassword,
+		arg.NewHash,
+		arg.Now,
+		arg.ID,
+		arg.OldHash,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const setTwoFactorRequired = `-- name: SetTwoFactorRequired :execrows
 UPDATE auth.users SET two_factor_required = $1, updated_at = $2 WHERE id = $3
 `

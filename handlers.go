@@ -334,7 +334,7 @@ func (a *Auth) logIn(w http.ResponseWriter, r *http.Request) {
 		// Unknown email, or an account that only signs in with OAuth. Do a
 		// password check's worth of work so the response takes as long as
 		// a wrong password would, and count it the same.
-		password.SimulateVerify(req.Password)
+		_, _ = a.verifyPassword(r.Context(), uuid.Nil, req.Password, nil)
 		a.wrongPassword(w, r, nil)
 		return
 	}
@@ -342,7 +342,7 @@ func (a *Auth) logIn(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteInternalError(w, r, a.log, err)
 		return
 	}
-	ok, err := password.Verify(req.Password, *row.PasswordHash)
+	ok, err := a.verifyPassword(r.Context(), row.ID, req.Password, row.PasswordHash)
 	if err != nil {
 		httpapi.WriteInternalError(w, r, a.log, fmt.Errorf("verifying password for user %s: %w", row.ID, err))
 		return
@@ -395,20 +395,20 @@ func (a *Auth) wrongPassword(w http.ResponseWriter, r *http.Request, userID *uui
 	writeInvalidCredentials(w, r)
 }
 
-// rehashIfNeeded upgrades a password hash made with older cost settings,
-// now that the password is known. Failing only means it's tried again on
+// rehashIfNeeded upgrades a bcrypt hash, or an argon2id hash made with
+// other cost settings, now that the password is known. Failing only means it's tried again on
 // the next login, so it doesn't fail the login.
 func (a *Auth) rehashIfNeeded(r *http.Request, row db.AuthUser, pw string) {
-	needs, err := password.NeedsRehash(*row.PasswordHash, password.DefaultParams)
-	if err != nil || !needs {
+	if !needsRehash(*row.PasswordHash) {
 		return
 	}
 	hash, err := password.Hash(pw, password.DefaultParams)
 	if err == nil {
-		err = a.q.UpdatePasswordHash(r.Context(), db.UpdatePasswordHashParams{
-			ID:           row.ID,
-			PasswordHash: &hash,
-			Now:          a.now().UTC().Truncate(time.Microsecond),
+		_, err = a.q.RehashPassword(r.Context(), db.RehashPasswordParams{
+			ID:      row.ID,
+			OldHash: row.PasswordHash,
+			NewHash: &hash,
+			Now:     a.now().UTC().Truncate(time.Microsecond),
 		})
 	}
 	if err != nil {
