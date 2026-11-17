@@ -4,6 +4,19 @@ What changed in each release of `github.com/atlasopsec/auth`. The Next.js templa
 
 The exported Go API and the HTTP endpoints follow [semantic versioning](https://semver.org): a minor release only adds, and anything removed or changed waits for the next major version.
 
+## v1.12.0
+
+Custom roles in invitations. **Run `Migrate` before deploying:** migrations `00016` (a nullable column and constraints on `auth.invitations`, added `NOT VALID` then validated) and `00017` (an index built `CONCURRENTLY`). Neither changes existing rows. See [docs/api.md §15](docs/api.md).
+
+### Added
+
+- `POST /v1/organizations/{id}/invitations` takes a custom role's key, `custom:<id>`, with the same rules as giving the role to a member. Invitations have `role_name`, like members.
+
+### Changed
+
+- When an invitation is accepted, a custom role is checked as it is then: a role widened past what the inviter holds, or deleted, makes the link fail like an expired one.
+- Deleting a custom role cancels its pending invitations.
+
 ## v1.11.0
 
 Role names in responses. No migrations.

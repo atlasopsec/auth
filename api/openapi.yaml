@@ -728,7 +728,10 @@ paths:
         permissions you all have (only owners invite owners). Emails a link
         that works for 7 days. Inviting the same address again replaces the
         earlier invitation; within a minute, it returns the existing
-        invitation without sending another email.
+        invitation without sending another email. `role` is a role defined
+        in code, or the `key` of one of the organization's own roles; when
+        the invitation is accepted, that role must still exist and the
+        inviter must still have all its permissions.
       tags: [invitations]
       requestBody:
         required: true
@@ -1436,11 +1439,12 @@ components:
 
     Invitation:
       type: object
-      required: [id, email, role, invited_by, expires_at, created_at]
+      required: [id, email, role, role_name, invited_by, expires_at, created_at]
       properties:
         id: { type: string, format: uuid }
         email: { type: string }
         role: { type: string }
+        role_name: { $ref: "#/components/schemas/RoleName" }
         invited_by: { type: string, format: uuid }
         expires_at: { type: string, format: date-time }
         created_at: { type: string, format: date-time }

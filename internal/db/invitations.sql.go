@@ -34,11 +34,11 @@ func (q *Queries) AcceptInvitation(ctx context.Context, arg AcceptInvitationPara
 
 const createInvitation = `-- name: CreateInvitation :one
 INSERT INTO auth.invitations (
-    id, organization_id, email, role, token_hash, invited_by, expires_at, created_at, updated_at
+    id, organization_id, email, role, custom_role_id, token_hash, invited_by, expires_at, created_at, updated_at
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $8
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $9
 )
-RETURNING id, organization_id, email, role, token_hash, invited_by, expires_at, accepted_at, created_at, updated_at
+RETURNING id, organization_id, email, role, token_hash, invited_by, expires_at, accepted_at, created_at, updated_at, custom_role_id
 `
 
 type CreateInvitationParams struct {
@@ -46,6 +46,7 @@ type CreateInvitationParams struct {
 	OrganizationID uuid.UUID
 	Email          string
 	Role           string
+	CustomRoleID   *uuid.UUID
 	TokenHash      []byte
 	InvitedBy      uuid.UUID
 	ExpiresAt      time.Time
@@ -58,6 +59,7 @@ func (q *Queries) CreateInvitation(ctx context.Context, arg CreateInvitationPara
 		arg.OrganizationID,
 		arg.Email,
 		arg.Role,
+		arg.CustomRoleID,
 		arg.TokenHash,
 		arg.InvitedBy,
 		arg.ExpiresAt,
@@ -75,6 +77,7 @@ func (q *Queries) CreateInvitation(ctx context.Context, arg CreateInvitationPara
 		&i.AcceptedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.CustomRoleID,
 	)
 	return i, err
 }
@@ -103,7 +106,7 @@ func (q *Queries) DeleteInvitation(ctx context.Context, id uuid.UUID) error {
 }
 
 const getInvitationByTokenHash = `-- name: GetInvitationByTokenHash :one
-SELECT id, organization_id, email, role, token_hash, invited_by, expires_at, accepted_at, created_at, updated_at FROM auth.invitations WHERE token_hash = $1
+SELECT id, organization_id, email, role, token_hash, invited_by, expires_at, accepted_at, created_at, updated_at, custom_role_id FROM auth.invitations WHERE token_hash = $1
 `
 
 func (q *Queries) GetInvitationByTokenHash(ctx context.Context, tokenHash []byte) (AuthInvitation, error) {
@@ -120,12 +123,13 @@ func (q *Queries) GetInvitationByTokenHash(ctx context.Context, tokenHash []byte
 		&i.AcceptedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.CustomRoleID,
 	)
 	return i, err
 }
 
 const getPendingInvitationForEmail = `-- name: GetPendingInvitationForEmail :one
-SELECT id, organization_id, email, role, token_hash, invited_by, expires_at, accepted_at, created_at, updated_at FROM auth.invitations
+SELECT id, organization_id, email, role, token_hash, invited_by, expires_at, accepted_at, created_at, updated_at, custom_role_id FROM auth.invitations
 WHERE organization_id = $1 AND lower(email) = lower($2) AND accepted_at IS NULL
 `
 
@@ -148,12 +152,13 @@ func (q *Queries) GetPendingInvitationForEmail(ctx context.Context, arg GetPendi
 		&i.AcceptedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.CustomRoleID,
 	)
 	return i, err
 }
 
 const getPendingInvitationInOrganization = `-- name: GetPendingInvitationInOrganization :one
-SELECT id, organization_id, email, role, token_hash, invited_by, expires_at, accepted_at, created_at, updated_at FROM auth.invitations
+SELECT id, organization_id, email, role, token_hash, invited_by, expires_at, accepted_at, created_at, updated_at, custom_role_id FROM auth.invitations
 WHERE organization_id = $1 AND id = $2 AND accepted_at IS NULL
 `
 
@@ -176,6 +181,7 @@ func (q *Queries) GetPendingInvitationInOrganization(ctx context.Context, arg Ge
 		&i.AcceptedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.CustomRoleID,
 	)
 	return i, err
 }
@@ -201,12 +207,14 @@ func (q *Queries) IsMemberByEmail(ctx context.Context, arg IsMemberByEmailParams
 }
 
 const listPendingInvitations = `-- name: ListPendingInvitations :many
-SELECT id, organization_id, email, role, token_hash, invited_by, expires_at, accepted_at, created_at, updated_at FROM auth.invitations
-WHERE organization_id = $1
-  AND accepted_at IS NULL
-  AND expires_at > $2
-  AND ($3::uuid IS NULL OR id > $3::uuid)
-ORDER BY id
+SELECT i.id, i.organization_id, i.email, i.role, i.token_hash, i.invited_by, i.expires_at, i.accepted_at, i.created_at, i.updated_at, i.custom_role_id, coalesce(r.name, i.role)::text AS role_name
+FROM auth.invitations i
+LEFT JOIN auth.organization_roles r ON r.organization_id = i.organization_id AND r.id = i.custom_role_id
+WHERE i.organization_id = $1
+  AND i.accepted_at IS NULL
+  AND i.expires_at > $2
+  AND ($3::uuid IS NULL OR i.id > $3::uuid)
+ORDER BY i.id
 LIMIT $4
 `
 
@@ -217,9 +225,16 @@ type ListPendingInvitationsParams struct {
 	MaxRows        int32
 }
 
+type ListPendingInvitationsRow struct {
+	AuthInvitation AuthInvitation
+	RoleName       string
+}
+
 // Invitation IDs are UUIDv7, so ordering by ID lists them oldest first, and
 // the last ID on a page is the cursor for the next.
-func (q *Queries) ListPendingInvitations(ctx context.Context, arg ListPendingInvitationsParams) ([]AuthInvitation, error) {
+// role_name is the custom role's name, or the role itself for a role
+// defined in code.
+func (q *Queries) ListPendingInvitations(ctx context.Context, arg ListPendingInvitationsParams) ([]ListPendingInvitationsRow, error) {
 	rows, err := q.db.Query(ctx, listPendingInvitations,
 		arg.OrganizationID,
 		arg.Now,
@@ -230,20 +245,22 @@ func (q *Queries) ListPendingInvitations(ctx context.Context, arg ListPendingInv
 		return nil, err
 	}
 	defer rows.Close()
-	var items []AuthInvitation
+	var items []ListPendingInvitationsRow
 	for rows.Next() {
-		var i AuthInvitation
+		var i ListPendingInvitationsRow
 		if err := rows.Scan(
-			&i.ID,
-			&i.OrganizationID,
-			&i.Email,
-			&i.Role,
-			&i.TokenHash,
-			&i.InvitedBy,
-			&i.ExpiresAt,
-			&i.AcceptedAt,
-			&i.CreatedAt,
-			&i.UpdatedAt,
+			&i.AuthInvitation.ID,
+			&i.AuthInvitation.OrganizationID,
+			&i.AuthInvitation.Email,
+			&i.AuthInvitation.Role,
+			&i.AuthInvitation.TokenHash,
+			&i.AuthInvitation.InvitedBy,
+			&i.AuthInvitation.ExpiresAt,
+			&i.AuthInvitation.AcceptedAt,
+			&i.AuthInvitation.CreatedAt,
+			&i.AuthInvitation.UpdatedAt,
+			&i.AuthInvitation.CustomRoleID,
+			&i.RoleName,
 		); err != nil {
 			return nil, err
 		}
