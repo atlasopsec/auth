@@ -2,7 +2,7 @@
 
 The module's public Go API and the HTTP endpoints it serves.
 
-> **Status:** §1–9 cover build steps 3–7 (approved and built). §10 covers build step 8 (rate limiting and the event log), approved and built. §11 covers build step 9 (the Next.js template), approved and built. Everything here is in `v1.0.0`. Sections marked **(Decision)** were confirmed in review. Later steps add to this but don't change what's here.
+> **Status:** §1–9 cover build steps 3–7 (approved and built). §10 covers build step 8 (rate limiting and the event log), approved and built. §11 covers build step 9 (the Next.js template), approved and built. Everything in §1–11 is in `v1.0.0`; §12 onward are later minor releases, each marked with its version. Sections marked **(Decision)** were confirmed in review. Later steps add to this but don't change what's here.
 
 Once a name below is released, changing or removing it is a breaking change (a new major version), so this is the moment to get it right.
 
@@ -1182,9 +1182,10 @@ auth.auth_events   id, user_id, actor_id, event, ip, user_agent, metadata, creat
 | `oauth_linked`, `oauth_unlinked` | `metadata.provider` |
 | `email_changed` | Never the addresses themselves |
 | `app_role_changed`, `org_role_changed`, `member_added`, `member_removed`, `two_factor_required_changed` | `actor_id` is who made the change; `metadata` has the organization and roles |
+| `user_created`, `user_deleted` | Accounts created or deleted from code (§12). `user_deleted` has no `user_id`, since the user is gone; `metadata.user_id` is their ID |
 
 - **IDs only:** `user_id` and `actor_id` are IDs. Never passwords, tokens, codes, or email addresses.
-- **Who made a change:** for an invitation, `member_added`'s actor is whoever sent it. The Go calls for admin tooling (`SetAppRole`, `SetTwoFactorRequired`, `ResetTwoFactor`, `CreateOrganization`) take a `by Actor` argument: the acting user's ID, IP, and user agent, which become the event's `actor_id`, `ip`, and `user_agent`. `a.ActorOf(r)` fills it in from the request an admin endpoint is handling; the zero `Actor{}` records no one, for seed scripts. Added just before `v1.0.0`, so adding an actor later wouldn't need a breaking change.
+- **Who made a change:** for an invitation, `member_added`'s actor is whoever sent it. The Go calls for admin tooling (`SetAppRole`, `SetTwoFactorRequired`, `ResetTwoFactor`, `CreateOrganization`, and the account management calls in §12) take a `by Actor` argument: the acting user's ID, IP, and user agent, which become the event's `actor_id`, `ip`, and `user_agent`. `a.ActorOf(r)` fills it in from the request an admin endpoint is handling; the zero `Actor{}` records no one, for seed scripts. Added just before `v1.0.0`, so adding an actor later wouldn't need a breaking change.
 - **Failed logins for unknown emails** are recorded with no `user_id`. They're still useful, by IP, for spotting credential stuffing.
 - **Recorded after the fact, best effort:** an event that fails to write is logged as an error, but doesn't fail the action that already happened.
 - **Kept for 1 year,** then deleted by the cleanup job. Projects with other retention needs can copy events out with the hook below.
@@ -1371,3 +1372,47 @@ Confirmed in review on 2026-10-29:
 4. **The API client forwards the browser's IP and user agent,** reading the IP from one header (`X-Real-IP` by default on Railway), to be checked on a real deploy.
 5. **Server actions for every form,** a short-lived cookie for the 2FA challenge, and a route handler for the OAuth callback, protected by its verifier cookie instead of an `Origin` check.
 6. **Tests:** Vitest and MSW for `lib/`, React Testing Library for forms, and Playwright against the example API for the five critical flows.
+
+---
+
+## 12. Managing accounts from code (v1.6.0)
+
+Go calls for projects that move their accounts in from another system, or run accounts from their own admin tools. There are no endpoints for them, on purpose: like `SetAppRole`, they trust their caller, so they belong behind a project's own staff permission, never wired straight to a user's request.
+
+```go
+func (a *Auth) CreateUser(ctx context.Context, u NewUser, by Actor) (User, error)
+func (a *Auth) UpdateUser(ctx context.Context, userID uuid.UUID, c UserChanges, by Actor) (User, error)
+func (a *Auth) DeleteUser(ctx context.Context, userID uuid.UUID, by Actor) error
+func (a *Auth) EndSessions(ctx context.Context, userID uuid.UUID, by Actor) error
+func (a *Auth) SetMemberRole(ctx context.Context, orgID, userID uuid.UUID, role string, by Actor) error
+func (a *Auth) RemoveMember(ctx context.Context, orgID, userID uuid.UUID, by Actor) error
+
+type NewUser struct {
+	Email        string // counts as verified: the caller vouches for it
+	PasswordHash string // "$argon2id$…", or "" for no password
+}
+
+type UserChanges struct {
+	Email        *string // nil: unchanged
+	PasswordHash *string // nil: unchanged; "": remove the password
+}
+```
+
+- **Existing password hashes, never passwords.** `CreateUser` and `UpdateUser` take the hash the other system already has, so nobody has to handle the plain password. In this release it must be argon2id in the PHC form the module stores; a hash with other argon2id settings is upgraded to the module's at the user's next login (that already happened for the module's own older hashes). Anything else is `ErrInvalidPasswordHash`, which never contains the hash. An empty hash means no password: the user signs in with a provider, or adds one with a password reset.
+- **Emails count as verified.** The project is vouching for the address, as when it moves accounts it has already verified. Addresses are checked like at sign-up and are unique regardless of case (`ErrInvalidEmail`, `ErrEmailTaken`).
+- **`CreateUser` runs `Hooks.OnUserCreated`** in its transaction, as sign-up does, so a project's own rows (a profile) exist for every user. If the hook fails, nothing is created and its error is returned.
+- **`UpdateUser` changes only what's different.** A new email or password hash ends the user's sessions, any login waiting for a 2FA code, and the links already emailed to them, as the module's own email and password changes do. A field that's nil, or already holds the value, changes nothing, so a sync can call it repeatedly. The module re-saves hashes at login (above), so the stored hash can differ from the one a project last gave: a sync should pass a hash only when it changed at the source.
+- **`DeleteUser`** deletes the user and everything the module keeps about them (sessions, memberships, app role, 2FA, providers, invitations they sent), and the project's own rows that cascade from `auth.users`. Their security events stay, without the link to them. It refuses (`ErrLastOwner`) if the user is the only owner of an organization.
+- **`EndSessions`** logs a user out everywhere, including logins waiting for a 2FA code, for support when an account may be compromised. It's recorded as `logout_everywhere` with the actor.
+- **`SetMemberRole`** adds a member or changes their role; **`RemoveMember`** removes them. Both take the same organization lock as the members endpoints, so neither can leave an organization without an owner (`ErrLastOwner`), even at the same time as an endpoint. Unlike the endpoints they don't check what the caller may grant: the caller is the project's own code. Setting a member's current role, or removing someone who isn't a member, changes nothing. `role` must be in `Config.OrgRoles` (`ErrUnknownRole`).
+- **No emails.** These calls copy changes the user usually made, and was told about, in the other system; emailing everyone during a move would be noise. A project that wants a notice sends its own.
+- **Every change is in the event log with its `Actor`:** `user_created`, `email_changed`, `password_changed`, `user_deleted`, `logout_everywhere`, `member_added`, `org_role_changed`, and `member_removed`. A call that changes nothing records nothing.
+- **Errors** are exported so callers can tell them apart with `errors.Is`: `ErrInvalidEmail`, `ErrEmailTaken`, `ErrInvalidPasswordHash`, `ErrUserNotFound`, `ErrOrganizationNotFound`, `ErrUnknownRole`, `ErrLastOwner`.
+
+### Creating organizations for an import (Decision)
+
+`CreateOrganization(ctx, name, ownerID, by)` already serves an import: users are created first, then each organization with one of its owners, then the other members with `SetMemberRole`. An organization without an owner would break the rule that every organization keeps one, which the module enforces everywhere else, so there's no way to create one. A project whose old system has organizations with nobody in an owner-like role picks one when it moves them.
+
+### Database
+
+No changes.

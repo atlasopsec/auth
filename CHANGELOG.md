@@ -4,6 +4,20 @@ What changed in each release of `github.com/atlasopsec/auth`. The Next.js templa
 
 The exported Go API and the HTTP endpoints follow [semantic versioning](https://semver.org): a minor release only adds, and anything removed or changed waits for the next major version.
 
+## Unreleased (v1.6.0)
+
+Managing accounts from code, for projects moving their accounts in from another system or running them from their own admin tools. No migrations. See [docs/api.md §12](docs/api.md).
+
+### Added
+
+- `CreateUser`: creates a user with a verified email and an existing argon2id password hash, or none. Runs `Hooks.OnUserCreated`.
+- `UpdateUser`: changes a user's email or password hash. A change ends their sessions and cancels links already emailed to them; values that are already set change nothing.
+- `DeleteUser`: deletes a user, unless they're the only owner of an organization.
+- `EndSessions`: logs a user out everywhere, including logins waiting for a 2FA code.
+- `SetMemberRole` and `RemoveMember`: add, change, or remove an organization membership, under the same lock as the members endpoints, so an organization always keeps an owner.
+- `NewUser`, `UserChanges`, and the errors `ErrInvalidEmail`, `ErrEmailTaken`, `ErrInvalidPasswordHash`, `ErrUserNotFound`, `ErrOrganizationNotFound`, `ErrUnknownRole`, and `ErrLastOwner`.
+- The events `user_created` and `user_deleted`. Every change these calls make is recorded with its `Actor`. They send no email.
+
 ## v1.5.2
 
 ### Security

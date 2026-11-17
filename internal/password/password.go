@@ -118,6 +118,14 @@ func Verify(password, encoded string) (bool, error) {
 	return subtle.ConstantTimeCompare(key, other) == 1, nil
 }
 
+// CheckHash reports whether encoded is a well-formed argon2id hash this
+// package can verify, for hashes copied in from another system. Like
+// Verify, its errors never echo the hash.
+func CheckHash(encoded string) error {
+	_, _, _, err := decode(encoded)
+	return err
+}
+
 // NeedsRehash reports whether an encoded hash was made with different
 // parameters than p, so it should be replaced after the next successful
 // login.

@@ -81,6 +81,7 @@ func listInvoices(w http.ResponseWriter, r *http.Request) {
 - `a.RequireOrg(permission, handler)` loads the session, rejects missing or expired ones (`401`), checks the user is a member of the organization in `X-Organization-ID` (`404` if not), checks the permission (`403`), and only then calls the handler. `a.Require` does the same with the user's app role. See api.md §7.
 - **Deny by default:** `a.Protect(mux)` refuses any request whose route isn't wrapped by `Public`, `Authenticated`, `Require`, or `RequireOrg`.
 - `auth.UserFrom(ctx)` gives handlers the current user. Its `ok` result is always true behind those wrappers.
+- Projects moving accounts in from another system, or managing them from their own admin tools, use the module's Go functions (`CreateUser`, `UpdateUser`, `DeleteUser`, `EndSessions`, `SetMemberRole`, `RemoveMember`; api.md §12). Nothing writes to the `auth` schema directly.
 
 ## 3. Package layout
 
@@ -277,3 +278,9 @@ Decided on 2026-10-28:
 | 3 | How a request names its organization | **The `X-Organization-ID` header** | Short URLs, one place that checks membership, and it fits the API standard's one-level nesting limit |
 | 4 | Where rate limits are stored | **Postgres** | Works across multiple API instances without adding Redis |
 | 5 | TOTP | **Implemented in-house** (RFC 6238), tested against the RFC's official test vectors | One less dependency in security-critical code |
+
+Decided on 2026-11-17, for projects that move their accounts in from another system:
+
+| # | Question | Decision | Why |
+|---|---|---|---|
+| 6 | How accounts move in from another system | **Through the module's Go functions, one way** (`CreateUser`, `UpdateUser`, `SetMemberRole`, ...; api.md §12). The module keeps owning the `auth` schema; projects never write to it | Every rule the module enforces (unique emails, an owner per organization, ending sessions on a password change) keeps holding during a move |
