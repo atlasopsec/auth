@@ -1445,3 +1445,21 @@ None new: bcrypt comes from `golang.org/x/crypto`, which the module already uses
 ### Database
 
 No changes.
+
+---
+
+## 14. Importing two-factor (v1.8.0)
+
+```go
+// ImportTwoFactor turns on a user's 2FA with a TOTP secret made elsewhere.
+func (a *Auth) ImportTwoFactor(ctx context.Context, userID uuid.UUID, secret string, by Actor) error
+```
+
+So that users moved in from another system keep their authenticator app, and keep needing it to log in.
+
+- **The secret is the plain base32 one** an authenticator app shows (either case, padding and spaces allowed). The module encrypts it with `Config.EncryptionKey` like any other, bound to the user's ID. It must be 128 to 512 bits: RFC 4226 requires at least 128 (`ErrInvalidTwoFactorSecret`, which never contains the secret). The other system must use the settings the module and nearly every app use: 6 digits, 30 seconds, SHA-1.
+- **No recovery codes are imported (Decision).** Users make new ones from their settings (`POST /v1/users/me/two-factor/recovery-codes`), which needs their password and a code from their app. Projects should prompt them to.
+- **It replaces** a pending setup or an earlier secret, and ends the user's sessions and logins waiting for a code, as turning 2FA on does. The same secret again changes nothing, so a sync can repeat it. Recovery codes the user already had in the module stay.
+- **The email must be verified** (`ErrEmailNotVerified`), as for setting 2FA up: 2FA on an account whose address was never proven could lock its real owner out. Users from `CreateUser` are verified.
+- **Recorded** as `two_factor_enabled` with the actor. No email is sent, like the other calls in §12.
+- No endpoint, and no migration.

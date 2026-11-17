@@ -90,3 +90,10 @@ WHERE used_at IS NOT NULL OR expires_at <= @now OR failed_attempts >= @max_faile
 
 -- name: DeleteTwoFactorFailuresBefore :execrows
 DELETE FROM auth.two_factor_failures WHERE created_at <= @before;
+
+-- Sets a confirmed secret made elsewhere, replacing any the user had.
+-- name: ImportTOTPSecret :exec
+INSERT INTO auth.totp_secrets (user_id, secret_encrypted, last_used_step, confirmed_at, created_at, updated_at)
+VALUES (@user_id, @secret_encrypted, 0, @now, @now, @now)
+ON CONFLICT (user_id) DO UPDATE
+SET secret_encrypted = excluded.secret_encrypted, last_used_step = 0, confirmed_at = excluded.confirmed_at, updated_at = excluded.updated_at;

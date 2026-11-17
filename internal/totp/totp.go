@@ -14,8 +14,10 @@ import (
 	"crypto/subtle"
 	"encoding/base32"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -92,6 +94,29 @@ var b32 = base32.StdEncoding.WithPadding(base32.NoPadding)
 // in: unpadded base32.
 func EncodeSecret(secret []byte) string {
 	return b32.EncodeToString(secret)
+}
+
+// Limits on secrets made elsewhere, in bytes. RFC 4226 requires at least
+// 128 bits.
+const (
+	MinImportedSecretSize = 16
+	MaxImportedSecretSize = 64
+)
+
+// ErrInvalidSecret means a secret given to DecodeSecret isn't base32, or
+// is shorter or longer than the limits.
+var ErrInvalidSecret = errors.New("totp: invalid secret")
+
+// DecodeSecret reads a secret as authenticator apps show it: base32, in
+// either case, with or without padding and spaces. Its errors never echo
+// the secret.
+func DecodeSecret(s string) ([]byte, error) {
+	s = strings.ToUpper(strings.TrimRight(strings.ReplaceAll(s, " ", ""), "="))
+	b, err := b32.DecodeString(s)
+	if err != nil || len(b) < MinImportedSecretSize || len(b) > MaxImportedSecretSize {
+		return nil, ErrInvalidSecret
+	}
+	return b, nil
 }
 
 // URI returns the otpauth:// URI that authenticator apps read from a QR
