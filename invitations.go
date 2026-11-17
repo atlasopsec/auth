@@ -344,7 +344,7 @@ func (a *Auth) accept(ctx context.Context, tok string, u User) (orgJSON, uuid.UU
 	if err := tx.Commit(ctx); err != nil {
 		return orgJSON{}, uuid.UUID{}, fmt.Errorf("committing acceptance: %w", err)
 	}
-	return toOrgJSON(Organization{ID: row.ID, Name: row.Name, CreatedAt: row.CreatedAt.UTC(), UpdatedAt: row.UpdatedAt.UTC()}, row.Role), inv.InvitedBy, nil
+	return toOrgJSON(Organization{ID: row.ID, Name: row.Name, CreatedAt: row.CreatedAt.UTC(), UpdatedAt: row.UpdatedAt.UTC()}, row.Role, row.RoleName), inv.InvitedBy, nil
 }
 
 // inviterStillMay returns errInvitationInvalid unless whoever sent inv is

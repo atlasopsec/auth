@@ -4,6 +4,14 @@ What changed in each release of `github.com/atlasopsec/auth`. The Next.js templa
 
 The exported Go API and the HTTP endpoints follow [semantic versioning](https://semver.org): a minor release only adds, and anything removed or changed waits for the next major version.
 
+## v1.11.0
+
+Role names in responses. No migrations.
+
+### Added
+
+- `role_name` next to `role` in organizations (`GET`, `POST /v1/organizations`, `GET`, `PATCH /v1/organizations/{id}`, and accepting an invitation) and members (`GET /v1/organizations/{id}/members`, `PATCH .../members/{user_id}`): the name of an organization's own role, or the role itself for one defined in code. Clients no longer need `GET /v1/organizations/{id}/roles` to show who has which role.
+
 ## v1.10.1
 
 ### Fixed

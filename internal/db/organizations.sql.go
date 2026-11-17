@@ -93,9 +93,10 @@ func (q *Queries) DeleteMembership(ctx context.Context, arg DeleteMembershipPara
 }
 
 const getMemberOrganization = `-- name: GetMemberOrganization :one
-SELECT o.id, o.name, o.created_at, o.updated_at, m.role
+SELECT o.id, o.name, o.created_at, o.updated_at, m.role, coalesce(r.name, m.role)::text AS role_name
 FROM auth.organizations o
 JOIN auth.memberships m ON m.organization_id = o.id
+LEFT JOIN auth.organization_roles r ON r.organization_id = m.organization_id AND r.id = m.custom_role_id
 WHERE o.id = $1 AND m.user_id = $2
 `
 
@@ -110,8 +111,11 @@ type GetMemberOrganizationRow struct {
 	CreatedAt time.Time
 	UpdatedAt time.Time
 	Role      string
+	RoleName  string
 }
 
+// role_name is the custom role's name, or the role itself for a role
+// defined in code.
 func (q *Queries) GetMemberOrganization(ctx context.Context, arg GetMemberOrganizationParams) (GetMemberOrganizationRow, error) {
 	row := q.db.QueryRow(ctx, getMemberOrganization, arg.OrganizationID, arg.UserID)
 	var i GetMemberOrganizationRow
@@ -121,6 +125,7 @@ func (q *Queries) GetMemberOrganization(ctx context.Context, arg GetMemberOrgani
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Role,
+		&i.RoleName,
 	)
 	return i, err
 }
@@ -150,9 +155,10 @@ func (q *Queries) GetMembership(ctx context.Context, arg GetMembershipParams) (A
 }
 
 const listMembers = `-- name: ListMembers :many
-SELECT m.id, m.user_id, u.email, m.role, m.created_at
+SELECT m.id, m.user_id, u.email, m.role, coalesce(r.name, m.role)::text AS role_name, m.created_at
 FROM auth.memberships m
 JOIN auth.users u ON u.id = m.user_id
+LEFT JOIN auth.organization_roles r ON r.organization_id = m.organization_id AND r.id = m.custom_role_id
 WHERE m.organization_id = $1
   AND ($2::uuid IS NULL OR m.id > $2::uuid)
 ORDER BY m.id
@@ -170,6 +176,7 @@ type ListMembersRow struct {
 	UserID    uuid.UUID
 	Email     string
 	Role      string
+	RoleName  string
 	CreatedAt time.Time
 }
 
@@ -189,6 +196,7 @@ func (q *Queries) ListMembers(ctx context.Context, arg ListMembersParams) ([]Lis
 			&i.UserID,
 			&i.Email,
 			&i.Role,
+			&i.RoleName,
 			&i.CreatedAt,
 		); err != nil {
 			return nil, err
@@ -202,9 +210,10 @@ func (q *Queries) ListMembers(ctx context.Context, arg ListMembersParams) ([]Lis
 }
 
 const listUserOrganizations = `-- name: ListUserOrganizations :many
-SELECT o.id, o.name, o.created_at, o.updated_at, m.role
+SELECT o.id, o.name, o.created_at, o.updated_at, m.role, coalesce(r.name, m.role)::text AS role_name
 FROM auth.organizations o
 JOIN auth.memberships m ON m.organization_id = o.id
+LEFT JOIN auth.organization_roles r ON r.organization_id = m.organization_id AND r.id = m.custom_role_id
 WHERE m.user_id = $1
 ORDER BY o.created_at, o.id
 `
@@ -215,6 +224,7 @@ type ListUserOrganizationsRow struct {
 	CreatedAt time.Time
 	UpdatedAt time.Time
 	Role      string
+	RoleName  string
 }
 
 func (q *Queries) ListUserOrganizations(ctx context.Context, userID uuid.UUID) ([]ListUserOrganizationsRow, error) {
@@ -232,6 +242,7 @@ func (q *Queries) ListUserOrganizations(ctx context.Context, userID uuid.UUID) (
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.Role,
+			&i.RoleName,
 		); err != nil {
 			return nil, err
 		}

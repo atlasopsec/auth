@@ -1398,13 +1398,22 @@ components:
 
     Organization:
       type: object
-      required: [id, name, role, created_at, updated_at]
+      required: [id, name, role, role_name, created_at, updated_at]
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
         role: { type: string, description: "The caller's role in it." }
+        role_name: { $ref: "#/components/schemas/RoleName" }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+
+    RoleName:
+      type: string
+      description: >
+        How to show `role`: the name of the organization's own role, or the
+        role itself for one defined in code (e.g. `admin`). Use `role` for
+        anything but display.
+      example: Billing clerk
 
     OrganizationRole:
       type: object
@@ -1438,11 +1447,12 @@ components:
 
     Member:
       type: object
-      required: [user_id, email, role, joined_at]
+      required: [user_id, email, role, role_name, joined_at]
       properties:
         user_id: { type: string, format: uuid }
         email: { type: string }
         role: { type: string }
+        role_name: { $ref: "#/components/schemas/RoleName" }
         joined_at: { type: string, format: date-time }
 
     CurrentUser:

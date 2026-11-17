@@ -125,6 +125,24 @@ func (a *Auth) roleByKey(ctx context.Context, q *db.Queries, orgID uuid.UUID, ke
 	return a.customRole(key, row.Permissions), nil
 }
 
+// roleName is how a role is shown: a custom role's name, or the role
+// itself for one defined in code. A custom role that no longer exists
+// shows as its key.
+func (a *Auth) roleName(ctx context.Context, q *db.Queries, orgID uuid.UUID, key string) (string, error) {
+	id, ok := customRoleID(key)
+	if !ok {
+		return key, nil
+	}
+	row, err := q.GetOrganizationRole(ctx, db.GetOrganizationRoleParams{OrganizationID: orgID, ID: id})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return key, nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("reading role: %w", err)
+	}
+	return row.Name, nil
+}
+
 // customRoleIDOf is the custom_role_id stored with a membership in role.
 func customRoleIDOf(r orgRole) *uuid.UUID {
 	if id, ok := customRoleID(r.key); ok {
