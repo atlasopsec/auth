@@ -415,3 +415,57 @@ func TestMigrationSettingsStayOffThePool(t *testing.T) {
 		}
 	}
 }
+
+// TestMigrateWaitingDoesNotDeadlockIndexBuilds covers an instance starting
+// while another is migrating. A migration that builds an index
+// CONCURRENTLY waits for every open transaction to end, so the waiting
+// instance must not wait inside a transaction for the migration lock: the
+// two would wait for each other, and Postgres would abort one.
+func TestMigrateWaitingDoesNotDeadlockIndexBuilds(t *testing.T) {
+	t.Parallel()
+	pool := testdb.New(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	// Another instance, part way through migrating: it holds the lock.
+	holder, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Release()
+	if _, err := holder.Exec(ctx, "SELECT pg_advisory_lock($1)", migrate.LockID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := holder.Exec(ctx, "CREATE TABLE things (id int)"); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- Migrate(ctx, pool) }()
+
+	// Wait until the starting instance has created the schema, or is
+	// waiting for the lock to do so.
+	for {
+		var ready bool
+		err := pool.QueryRow(ctx, `SELECT
+			EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'auth')
+			OR EXISTS (SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND NOT granted)`).Scan(&ready)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ready {
+			break
+		}
+	}
+
+	// The migrating instance builds an index concurrently.
+	if _, err := holder.Exec(ctx, "CREATE INDEX CONCURRENTLY idx_things_id ON things (id)"); err != nil {
+		t.Errorf("building an index while another instance waits to migrate: %v", err)
+	}
+	if _, err := holder.Exec(ctx, "SELECT pg_advisory_unlock($1)", migrate.LockID); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Errorf("Migrate() while another instance was migrating: %v", err)
+	}
+}
