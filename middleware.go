@@ -12,7 +12,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
-	"github.com/atlasopsec/auth/internal/db"
 	"github.com/atlasopsec/auth/internal/httpapi"
 	"github.com/atlasopsec/auth/internal/session"
 	"github.com/atlasopsec/auth/rbac"
@@ -32,8 +31,9 @@ type contextKey struct{}
 type current struct {
 	user    User
 	session session.Session
-	// org is set by RequireOrg.
-	org *Org
+	// org is set by RequireOrg, and role is the user's role there.
+	org  *Org
+	role orgRole
 	// can checks a permission against the role Require or RequireOrg
 	// looked up. It's nil under Authenticated, where Can is always false.
 	can func(rbac.Permission) bool
@@ -148,7 +148,9 @@ func (a *Auth) Require(permission rbac.Permission, h http.Handler) http.Handler 
 			httpapi.WriteInternalError(w, r, a.log, err)
 			return
 		}
-		a.warnUndefinedRole(r, a.appRoles, role, c.user.ID)
+		if !a.appRoles.Defines(role) {
+			a.warnUndefinedRole(r, role, c.user.ID)
+		}
 		c.can = func(p rbac.Permission) bool { return a.appRoles.Has(role, p) }
 		if !c.can(permission) {
 			writeForbidden(w, r)
@@ -212,7 +214,7 @@ func (a *Auth) orgRoute(permission rbac.Permission, src orgSource, h http.Handle
 			src.bad(w, r)
 			return
 		}
-		role, err := a.q.GetMembershipRole(r.Context(), db.GetMembershipRoleParams{OrganizationID: orgID, UserID: c.user.ID})
+		role, err := a.memberRole(r.Context(), a.q, orgID, c.user.ID)
 		if errors.Is(err, pgx.ErrNoRows) {
 			writeNotFound(w, r)
 			return
@@ -221,9 +223,12 @@ func (a *Auth) orgRoute(permission rbac.Permission, src orgSource, h http.Handle
 			httpapi.WriteInternalError(w, r, a.log, err)
 			return
 		}
-		a.warnUndefinedRole(r, a.orgRoles, role, c.user.ID)
-		c.org = &Org{ID: orgID, Role: role}
-		c.can = func(p rbac.Permission) bool { return a.orgCan(role, p) }
+		if !role.defined {
+			a.warnUndefinedRole(r, role.key, c.user.ID)
+		}
+		c.org = &Org{ID: orgID, Role: role.key}
+		c.role = role
+		c.can = role.can
 		if permission != "" && !c.can(permission) {
 			writeForbidden(w, r)
 			return
@@ -232,16 +237,10 @@ func (a *Auth) orgRoute(permission rbac.Permission, src orgSource, h http.Handle
 	}))}
 }
 
-// orgCan reports whether an organization role grants p. Owners always
-// can, so an organization can't be locked out of its own settings.
-func (a *Auth) orgCan(role string, p rbac.Permission) bool {
-	return role == OwnerRole || a.orgRoles.Has(role, p)
-}
-
 // warnUndefinedRole logs a stored role that's no longer defined in code.
 // It grants nothing, but someone should clean it up.
-func (a *Auth) warnUndefinedRole(r *http.Request, roles rbac.Roles, role string, userID uuid.UUID) {
-	if role != "" && !roles.Defines(role) {
+func (a *Auth) warnUndefinedRole(r *http.Request, role string, userID uuid.UUID) {
+	if role != "" {
 		a.log.WarnContext(r.Context(), "auth: user has a role that's no longer defined; it grants nothing",
 			slog.String("request_id", httpapi.RequestIDFrom(r.Context())),
 			slog.String("user_id", userID.String()),
@@ -305,7 +304,10 @@ func SessionFrom(ctx context.Context) (s Session, ok bool) {
 // Org is the organization a RequireOrg request is for, and the user's role
 // in it.
 type Org struct {
-	ID   uuid.UUID
+	ID uuid.UUID
+	// Role is the user's role: a name from Config.OrgRoles, or, for a role
+	// the organization defined, "custom:<role ID>" (see CustomRoleKey).
+	// Check permissions with Can, never role names.
 	Role string
 }
 

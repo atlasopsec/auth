@@ -1,9 +1,10 @@
 // Package rbac defines roles and permissions for the auth module.
 //
 // A permission is a specific action named "resource:action", such as
-// "invoices:create". A role is a named set of permissions. Roles live in Go
-// code, not the database, so every change to who can do what goes through
-// code review. Code checks permissions, never role names, so roles can
+// "invoices:create". A role is a named set of permissions. Permissions and
+// the fixed roles live in Go code, not the database, so every permission
+// check goes through code review. Organizations can also define roles of
+// their own, but only from the permissions these roles list. Code checks permissions, never role names, so roles can
 // change without hunting through handlers.
 package rbac
 

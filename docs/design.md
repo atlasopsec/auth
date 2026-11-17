@@ -121,7 +121,8 @@ auth.totp_secrets       user_id, secret_encrypted, confirmed_at, created_at
 auth.recovery_codes     id, user_id, code_hash, used_at, created_at
 auth.email_tokens       id, user_id, purpose (verify|reset|change), token_hash, expires_at, used_at, created_at
 auth.organizations      id, name, created_at, updated_at
-auth.memberships        id, user_id, organization_id, role, created_at, updated_at
+auth.memberships        id, user_id, organization_id, role, custom_role_id, created_at, updated_at
+auth.organization_roles id, organization_id, name, permissions, created_at, updated_at
 auth.auth_events        id, user_id, event, ip, user_agent, metadata, created_at
 auth.rate_limits        key, window_start, count
 ```
@@ -201,6 +202,7 @@ var appRoles = rbac.Roles{
 - `Require` checks the user's app role.
 - **Deny by default:** `a.Protect(mux)` wraps the project's whole router and refuses (`500`, logged) any request whose route wasn't wrapped by `Public`, `Authenticated`, `Require`, or `RequireOrg`, so a forgotten permission fails closed. Go's `ServeMux` can't list its routes, which rules out a `CheckRoutes` test helper. See api.md §7.
 - Projects without organizations (simple consumer apps) use only app roles.
+- An organization can also define its own roles, built only from the permissions the project declares (api.md §15). The module enforces that nobody grants what they don't hold, the owner role stays fixed, an organization keeps an owner, and a role in use isn't deleted.
 
 ## 7. Email
 
@@ -284,3 +286,4 @@ Decided on 2026-11-17, for projects that move their accounts in from another sys
 | # | Question | Decision | Why |
 |---|---|---|---|
 | 6 | How accounts move in from another system | **Through the module's Go functions, one way** (`CreateUser`, `UpdateUser`, `SetMemberRole`, ...; api.md §12). The module keeps owning the `auth` schema; projects never write to it | Every rule the module enforces (unique emails, an owner per organization, ending sessions on a password change) keeps holding during a move |
+| 7 | Whether organizations can define roles | **Yes, only from the permissions the project declares in Go**, stored in `auth.organization_roles`, with the module enforcing no escalation (api.md §15) | Clients want roles that fit their team; keeping permissions in code keeps every check in reviewed code |

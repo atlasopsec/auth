@@ -127,6 +127,7 @@ func (a *Auth) registerOrganizations(mux *http.ServeMux) {
 	// Leaving needs no permission, so this checks it in the handler.
 	mux.Handle("DELETE /v1/organizations/{id}/members/{user_id}", endpoint(a.orgRoute("", orgFromPath, http.HandlerFunc(a.removeMember))))
 	a.registerInvitations(mux)
+	a.registerOrgRoles(mux)
 }
 
 type orgJSON struct {
@@ -320,29 +321,39 @@ func (a *Auth) changeMemberRole(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteDecodeError(w, r, err)
 		return
 	}
-	if !a.orgRoles.Defines(req.Role) {
-		writeValidationFailed(w, r, []httpapi.FieldError{{Field: "role", Code: "invalid_value", Message: "That isn't one of this app's roles."}})
+	_, custom := customRoleID(req.Role)
+	if !custom && !a.orgRoles.Defines(req.Role) {
+		writeInvalidRole(w, r)
 		return
 	}
 
-	err = a.changeMembers(r.Context(), c.org.ID, func(q *db.Queries, actorRole string) error {
-		m, err := q.GetMembership(r.Context(), db.GetMembershipParams{OrganizationID: c.org.ID, UserID: target})
+	err = a.changeMembers(r.Context(), c.org.ID, func(q *db.Queries, actor orgRole) error {
+		current, err := a.memberRole(r.Context(), q, c.org.ID, target)
 		if err != nil {
 			return err
 		}
-		if m.Role == req.Role {
+		if current.key == req.Role {
 			return nil
 		}
-		if !a.mayAssign(actorRole, m.Role) || !a.mayAssign(actorRole, req.Role) {
+		// Read under the lock, so the role can't change or go between the
+		// check and the update. One of another organization isn't found.
+		next, err := a.roleByKey(r.Context(), q, c.org.ID, req.Role)
+		if err != nil {
+			return err
+		}
+		if !next.defined {
+			return errUnknownRole
+		}
+		if !mayAssign(actor, current) || !mayAssign(actor, next) {
 			return errForbidden
 		}
-		if m.Role == OwnerRole {
+		if current.key == OwnerRole {
 			if err := lastOwnerCheck(r.Context(), q, c.org.ID); err != nil {
 				return err
 			}
 		}
 		return q.SetMembershipRole(r.Context(), db.SetMembershipRoleParams{
-			OrganizationID: c.org.ID, UserID: target, Role: req.Role, Now: a.now().UTC().Truncate(time.Microsecond),
+			OrganizationID: c.org.ID, UserID: target, Role: req.Role, CustomRoleID: customRoleIDOf(next), Now: a.now().UTC().Truncate(time.Microsecond),
 		})
 	}, c.user.ID, PermMembersManage)
 	if a.writeMemberChangeError(w, r, err) {
@@ -379,15 +390,15 @@ func (a *Auth) removeMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = a.changeMembers(r.Context(), c.org.ID, func(q *db.Queries, actorRole string) error {
-		m, err := q.GetMembership(r.Context(), db.GetMembershipParams{OrganizationID: c.org.ID, UserID: target})
+	err = a.changeMembers(r.Context(), c.org.ID, func(q *db.Queries, actor orgRole) error {
+		m, err := a.memberRole(r.Context(), q, c.org.ID, target)
 		if err != nil {
 			return err
 		}
-		if !self && !a.mayAssign(actorRole, m.Role) {
+		if !self && !mayAssign(actor, m) {
 			return errForbidden
 		}
-		if m.Role == OwnerRole {
+		if m.key == OwnerRole {
 			if err := lastOwnerCheck(r.Context(), q, c.org.ID); err != nil {
 				return err
 			}
@@ -402,14 +413,22 @@ func (a *Auth) removeMember(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-var errForbidden = errors.New("forbidden")
+var (
+	errForbidden = errors.New("forbidden")
+	// errUnknownRole means a role key names no role in the organization.
+	errUnknownRole = errors.New("unknown role")
+)
+
+func writeInvalidRole(w http.ResponseWriter, r *http.Request) {
+	writeValidationFailed(w, r, []httpapi.FieldError{{Field: "role", Code: "invalid_value", Message: "That isn't one of this organization's roles."}})
+}
 
 // changeMembers runs change in a transaction that holds the organization's
 // lock, so concurrent changes can't leave it without an owner. change gets
 // the actor's role as it is now, inside the lock. If need is set, the actor
 // must still have it under the lock: the check before the lock may have
 // read a role that has changed since.
-func (a *Auth) changeMembers(ctx context.Context, orgID uuid.UUID, change func(q *db.Queries, actorRole string) error, actorID uuid.UUID, need rbac.Permission) error {
+func (a *Auth) changeMembers(ctx context.Context, orgID uuid.UUID, change func(q *db.Queries, actor orgRole) error, actorID uuid.UUID, need rbac.Permission) error {
 	tx, err := a.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("beginning member change: %w", err)
@@ -420,14 +439,14 @@ func (a *Auth) changeMembers(ctx context.Context, orgID uuid.UUID, change func(q
 	if _, err := q.LockOrganization(ctx, orgID); err != nil {
 		return err
 	}
-	actorRole, err := q.GetMembershipRole(ctx, db.GetMembershipRoleParams{OrganizationID: orgID, UserID: actorID})
+	actor, err := a.memberRole(ctx, q, orgID, actorID)
 	if err != nil {
 		return err
 	}
-	if need != "" && !a.orgCan(actorRole, need) {
+	if need != "" && !actor.can(need) {
 		return errForbidden
 	}
-	if err := change(q, actorRole); err != nil {
+	if err := change(q, actor); err != nil {
 		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -448,6 +467,8 @@ func (a *Auth) writeMemberChangeError(w http.ResponseWriter, r *http.Request, er
 		writeNotFound(w, r)
 	case errors.Is(err, errForbidden):
 		writeForbidden(w, r)
+	case errors.Is(err, errUnknownRole):
+		writeInvalidRole(w, r)
 	case errors.Is(err, ErrLastOwner):
 		httpapi.WriteError(w, r, http.StatusConflict, "last_owner",
 			"An organization needs at least one owner. Make someone else an owner first.", nil)
@@ -469,25 +490,6 @@ func lastOwnerCheck(ctx context.Context, q *db.Queries, orgID uuid.UUID) error {
 		return ErrLastOwner
 	}
 	return nil
-}
-
-// mayAssign reports whether someone with actorRole may give a member
-// role, or change the role of a member who has it: only owners may touch
-// owners, and anyone else must already have every permission role grants.
-// A role no longer defined in code grants nothing, so it's always covered.
-func (a *Auth) mayAssign(actorRole, role string) bool {
-	if actorRole == OwnerRole {
-		return true
-	}
-	if role == OwnerRole {
-		return false
-	}
-	for _, p := range a.orgRoles[role] {
-		if p == rbac.All || !a.orgCan(actorRole, p) {
-			return false
-		}
-	}
-	return true
 }
 
 func (a *Auth) memberRow(ctx context.Context, orgID, userID uuid.UUID) (memberJSON, error) {

@@ -205,6 +205,9 @@ type Auth struct {
 	orgRoles       rbac.Roles
 	appRoles       rbac.Roles
 	twoFactorRoles []string
+	// privilegedPerms make a custom organization role privileged; see
+	// privilegedPermissions.
+	privilegedPerms []string
 	// providers are the OAuth providers turned on, by name.
 	providers map[string]oauth.Provider
 	// apple is nil unless native Sign in with Apple is on.
@@ -280,6 +283,7 @@ func New(cfg Config) (*Auth, error) {
 		orgRoles:         cfg.OrgRoles,
 		appRoles:         cfg.AppRoles,
 		twoFactorRoles:   append([]string(nil), cfg.TwoFactorRoles...),
+		privilegedPerms:  privilegedPermissions(cfg.OrgRoles, cfg.TwoFactorRoles),
 
 		disableOrgCreation: cfg.DisableOrganizationCreation,
 	}
