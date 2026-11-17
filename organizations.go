@@ -137,12 +137,15 @@ type orgJSON struct {
 	ID        uuid.UUID `json:"id"`
 	Name      string    `json:"name"`
 	Role      string    `json:"role"`
+	RoleName  string    `json:"role_name"`
 	CreatedAt timestamp `json:"created_at"`
 	UpdatedAt timestamp `json:"updated_at"`
 }
 
-func toOrgJSON(o Organization, role string) orgJSON {
-	return orgJSON{ID: o.ID, Name: o.Name, Role: role, CreatedAt: timestamp(o.CreatedAt), UpdatedAt: timestamp(o.UpdatedAt)}
+// toOrgJSON is an organization with the user's role, its key and its name:
+// a custom role's name, or the role itself for one defined in code.
+func toOrgJSON(o Organization, role, roleName string) orgJSON {
+	return orgJSON{ID: o.ID, Name: o.Name, Role: role, RoleName: roleName, CreatedAt: timestamp(o.CreatedAt), UpdatedAt: timestamp(o.UpdatedAt)}
 }
 
 type orgNameRequest struct {
@@ -186,7 +189,7 @@ func (a *Auth) createOrganization(w http.ResponseWriter, r *http.Request) {
 	}
 	a.logEvent(r, "auth: organization created", c.user.ID)
 	a.event(r, EventMemberAdded, &c.user.ID, nil, map[string]string{"organization_id": o.ID.String(), "role": OwnerRole})
-	httpapi.WriteJSON(w, r, http.StatusCreated, toOrgJSON(o, OwnerRole))
+	httpapi.WriteJSON(w, r, http.StatusCreated, toOrgJSON(o, OwnerRole, OwnerRole))
 }
 
 type orgList struct {
@@ -205,7 +208,7 @@ func (a *Auth) listOrganizations(w http.ResponseWriter, r *http.Request) {
 	}
 	list := orgList{Data: make([]orgJSON, len(rows))}
 	for i, row := range rows {
-		list.Data[i] = toOrgJSON(Organization{ID: row.ID, Name: row.Name, CreatedAt: row.CreatedAt.UTC(), UpdatedAt: row.UpdatedAt.UTC()}, row.Role)
+		list.Data[i] = toOrgJSON(Organization{ID: row.ID, Name: row.Name, CreatedAt: row.CreatedAt.UTC(), UpdatedAt: row.UpdatedAt.UTC()}, row.Role, row.RoleName)
 	}
 	httpapi.WriteJSON(w, r, http.StatusOK, list)
 }
@@ -223,7 +226,7 @@ func (a *Auth) getOrganization(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	o := Organization{ID: row.ID, Name: row.Name, CreatedAt: row.CreatedAt.UTC(), UpdatedAt: row.UpdatedAt.UTC()}
-	httpapi.WriteJSON(w, r, http.StatusOK, toOrgJSON(o, row.Role))
+	httpapi.WriteJSON(w, r, http.StatusOK, toOrgJSON(o, row.Role, row.RoleName))
 }
 
 func (a *Auth) renameOrganization(w http.ResponseWriter, r *http.Request) {
@@ -237,13 +240,19 @@ func (a *Auth) renameOrganization(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteInternalError(w, r, a.log, err)
 		return
 	}
-	httpapi.WriteJSON(w, r, http.StatusOK, toOrgJSON(orgFromRow(row), c.org.Role))
+	roleName, err := a.roleName(r.Context(), a.q, c.org.ID, c.org.Role)
+	if err != nil {
+		httpapi.WriteInternalError(w, r, a.log, err)
+		return
+	}
+	httpapi.WriteJSON(w, r, http.StatusOK, toOrgJSON(orgFromRow(row), c.org.Role, roleName))
 }
 
 type memberJSON struct {
 	UserID   uuid.UUID `json:"user_id"`
 	Email    string    `json:"email"`
 	Role     string    `json:"role"`
+	RoleName string    `json:"role_name"`
 	JoinedAt timestamp `json:"joined_at"`
 }
 
@@ -270,7 +279,7 @@ func (a *Auth) listMembers(w http.ResponseWriter, r *http.Request) {
 			list.NextCursor = &next
 			break
 		}
-		list.Data = append(list.Data, memberJSON{UserID: row.UserID, Email: row.Email, Role: row.Role, JoinedAt: timestamp(row.CreatedAt)})
+		list.Data = append(list.Data, memberJSON{UserID: row.UserID, Email: row.Email, Role: row.Role, RoleName: row.RoleName, JoinedAt: timestamp(row.CreatedAt)})
 	}
 	httpapi.WriteJSON(w, r, http.StatusOK, list)
 }
@@ -504,5 +513,9 @@ func (a *Auth) memberRow(ctx context.Context, orgID, userID uuid.UUID) (memberJS
 	if err != nil {
 		return memberJSON{}, fmt.Errorf("reading member: %w", err)
 	}
-	return memberJSON{UserID: userID, Email: u.Email, Role: m.Role, JoinedAt: timestamp(m.CreatedAt)}, nil
+	roleName, err := a.roleName(ctx, a.q, orgID, m.Role)
+	if err != nil {
+		return memberJSON{}, err
+	}
+	return memberJSON{UserID: userID, Email: u.Email, Role: m.Role, RoleName: roleName, JoinedAt: timestamp(m.CreatedAt)}, nil
 }

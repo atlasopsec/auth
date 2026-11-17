@@ -7,16 +7,20 @@ RETURNING *;
 INSERT INTO auth.memberships (id, organization_id, user_id, role, custom_role_id, created_at, updated_at)
 VALUES (@id, @organization_id, @user_id, @role, sqlc.narg(custom_role_id), @now, @now);
 
+-- role_name is the custom role's name, or the role itself for a role
+-- defined in code.
 -- name: GetMemberOrganization :one
-SELECT o.id, o.name, o.created_at, o.updated_at, m.role
+SELECT o.id, o.name, o.created_at, o.updated_at, m.role, coalesce(r.name, m.role)::text AS role_name
 FROM auth.organizations o
 JOIN auth.memberships m ON m.organization_id = o.id
+LEFT JOIN auth.organization_roles r ON r.organization_id = m.organization_id AND r.id = m.custom_role_id
 WHERE o.id = @organization_id AND m.user_id = @user_id;
 
 -- name: ListUserOrganizations :many
-SELECT o.id, o.name, o.created_at, o.updated_at, m.role
+SELECT o.id, o.name, o.created_at, o.updated_at, m.role, coalesce(r.name, m.role)::text AS role_name
 FROM auth.organizations o
 JOIN auth.memberships m ON m.organization_id = o.id
+LEFT JOIN auth.organization_roles r ON r.organization_id = m.organization_id AND r.id = m.custom_role_id
 WHERE m.user_id = @user_id
 ORDER BY o.created_at, o.id;
 
@@ -28,9 +32,10 @@ RETURNING *;
 -- Membership IDs are UUIDv7, so ordering by ID lists members in the order
 -- they joined, and the last ID on a page is the cursor for the next.
 -- name: ListMembers :many
-SELECT m.id, m.user_id, u.email, m.role, m.created_at
+SELECT m.id, m.user_id, u.email, m.role, coalesce(r.name, m.role)::text AS role_name, m.created_at
 FROM auth.memberships m
 JOIN auth.users u ON u.id = m.user_id
+LEFT JOIN auth.organization_roles r ON r.organization_id = m.organization_id AND r.id = m.custom_role_id
 WHERE m.organization_id = @organization_id
   AND (sqlc.narg(after)::uuid IS NULL OR m.id > sqlc.narg(after)::uuid)
 ORDER BY m.id

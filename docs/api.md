@@ -1482,6 +1482,8 @@ The project still declares its permissions and fixed roles in Go (§7). On top o
 
 A role is returned as `{ id, key, name, permissions, created_at, updated_at }`. Its `key`, `custom:<id>`, is how members have it: it's the `role` in members lists, `GET /v1/organizations`, and `auth.OrgFrom(ctx).Role`. Code checks permissions with `Can`, never role names (§7), so project handlers need no change.
 
+**Role names (v1.11.0).** Wherever a response has a member's or the caller's `role`, it also has `role_name`, for display: the custom role's name, or the role itself for one defined in code (`admin`). Renaming a custom role changes it everywhere at once. `role` stays the value to send back and compare.
+
 ### What the module enforces (Decision)
 
 - **Only declared permissions.** A custom role can have only permissions some role in `Config.OrgRoles` lists by name, never `*` (`422`). If a permission is later removed from code, custom roles stop granting it at once; it's checked on every request, not only when the role is saved.
