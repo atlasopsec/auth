@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/netip"
+	"slices"
 	"strings"
 	"time"
 
@@ -155,6 +156,20 @@ type Config struct {
 	// DisableNewDeviceEmails stops emailing users when they log in from a
 	// browser or app and network they haven't used in the last 90 days.
 	DisableNewDeviceEmails bool
+
+	// APIKeyPermissions turns on API keys, for machines that call the
+	// project's API (docs/api.md §18), and lists every permission a key
+	// may carry. Each must be in some role in AppRoles, and never
+	// rbac.All. Only Require accepts a key. Leave it empty to keep keys
+	// off.
+	APIKeyPermissions []rbac.Permission
+
+	// APIKeyPrefix starts every key, followed by "_", so a key can't be
+	// mistaken for a session token and secret scanners can find one that
+	// leaks, e.g. "acme". Lowercase letters, digits, and underscores,
+	// starting with a letter, 3 to 20 characters. Required with
+	// APIKeyPermissions.
+	APIKeyPrefix string
 }
 
 // ErrSignUpNotAllowed is returned by Hooks.OnUserCreated to refuse a
@@ -244,6 +259,10 @@ type Auth struct {
 	managedElsewhere bool
 	// bcryptDummy is set only with Config.AllowBcryptHashes.
 	bcryptDummy *password.BcryptDummy
+	// keyPerms and keyPrefix are Config.APIKeyPermissions and
+	// Config.APIKeyPrefix. keyPrefix is empty when keys are off.
+	keyPerms  []rbac.Permission
+	keyPrefix string
 }
 
 // breachChecker is implemented by *pwned.Checker, and faked in tests.
@@ -290,6 +309,9 @@ func New(cfg Config) (*Auth, error) {
 			return nil, fmt.Errorf("auth: Config.TwoFactorRoles: %q isn't a role in Config.OrgRoles or Config.AppRoles", role)
 		}
 	}
+	if err := checkAPIKeyConfig(cfg); err != nil {
+		return nil, err
+	}
 	a := &Auth{
 		pool:             cfg.DB,
 		q:                db.New(cfg.DB),
@@ -310,6 +332,10 @@ func New(cfg Config) (*Auth, error) {
 
 		disableOrgCreation: cfg.DisableOrganizationCreation || cfg.AccountsManagedElsewhere,
 		managedElsewhere:   cfg.AccountsManagedElsewhere,
+		keyPerms:           slices.Clone(cfg.APIKeyPermissions),
+	}
+	if len(cfg.APIKeyPermissions) > 0 {
+		a.keyPrefix = cfg.APIKeyPrefix
 	}
 	if a.log == nil {
 		a.log = slog.Default()

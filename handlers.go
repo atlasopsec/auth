@@ -526,8 +526,19 @@ func (a *Auth) logOutEverywhere(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteInternalError(w, r, a.log, err)
 		return
 	}
+	// Someone logging out everywhere may think their account is in other
+	// hands, so their API keys go too.
+	keys, err := deleteUserAPIKeys(r.Context(), a.q, c.user.ID)
+	if err != nil {
+		httpapi.WriteInternalError(w, r, a.log, err)
+		return
+	}
 	a.logEvent(r, "auth: user logged out everywhere", c.user.ID)
 	a.event(r, EventLogoutEverywhere, &c.user.ID, nil, nil)
+	for _, id := range keys {
+		e := revokedKeyEvent(c.user.ID, id)
+		a.event(r, e.Type, e.UserID, nil, e.Metadata)
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 

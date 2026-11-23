@@ -1588,11 +1588,9 @@ APIKeyPermissions []rbac.Permission
 // Starts every key, so it can be told from a session token and found by secret scanners.
 // Required when APIKeyPermissions is set: lowercase letters, digits, and _, 3 to 20 characters.
 APIKeyPrefix string
-// Lets a holder list and revoke other users' keys. Empty means nobody can.
-APIKeyAdminPermission rbac.Permission
 ```
 
-`New` refuses a permission in `APIKeyPermissions` that no app role has, the same check `Require` makes when a route is registered.
+`New` refuses a permission in `APIKeyPermissions` that no app role has, the same check `Require` makes when a route is registered, and `*`.
 
 ### What a key is (Decision)
 
@@ -1614,15 +1612,17 @@ Revoking a key deletes its row. Its events stay.
 
 A key goes in the header sessions use: `Authorization: Bearer example_…`. Only `Require` accepts one. `Authenticated`, `RequireOrg`, `Public`, and every module endpoint answer `401` to a key, as they do to a bad session. So a key can never change a password, manage 2FA, or make another key.
 
-When the bearer token starts with the prefix, `Require`:
+When the bearer token has a key's exact shape (the prefix, `_`, and 43 base64url characters), `Require`:
 
-1. Checks the shape (prefix, `_`, 43 base64url characters), then looks up the hash. A miss is `401 unauthenticated`, counted by the same per-IP limit as failed logins (§10).
-2. Answers `401` if the key has expired.
-3. Loads the owner's current app role, and grants only the permissions both the key and the role have. That happens on every request, like a session's role check (§7), so an owner who is demoted, or loses their role, takes their keys' power with them at once.
+1. Answers `429` if the client's address has used up the failed-login limit (§10). Otherwise it looks up the hash. A miss, or an expired key, is `401 unauthenticated`, and counts toward that limit.
+2. Answers `403 two_factor_setup_required` if the owner must set up 2FA and hasn't, as for a session.
+3. Loads the owner's current app role, and grants only the permissions the key lists, `APIKeyPermissions` still has, and the role has. That happens on every request, like a session's role check (§7), so an owner who is demoted, or loses their role, takes their keys' power with them at once, and so does a project that narrows `APIKeyPermissions`.
 4. Answers `403 forbidden` if the route's permission isn't in that set.
 5. Records the use, at most once a minute, and runs the handler.
 
-Inside the handler, `UserFrom` returns the owner and `Can` checks the narrowed set. `SessionFrom` returns `ok == false`. `APIKeyFrom(ctx)` returns the key's ID and name, for logs.
+A token without a key's shape is checked as a session token, and a key never is one, since a session token is exactly as long as a key's secret alone. With keys off, a key is refused like any bad token.
+
+Inside the handler, `UserFrom` returns the owner and `Can` checks the narrowed set. `SessionFrom` returns `ok == false`. `APIKeyFrom(ctx)` returns the key (its ID and name, for logs).
 
 A key skips 2FA when used, since a machine can't type a code. It makes up for that when it's created (next) and with its expiry. Using a key isn't a login: no session row, and no new-device email.
 
@@ -1641,7 +1641,7 @@ The key endpoints stay on under `AccountsManagedElsewhere` (§16), since a key i
 ### Revoking (Decision)
 
 - **By the owner,** with `DELETE /v1/api-keys/{id}`.
-- **By an admin,** through `ListAPIKeys` and `RevokeAPIKey` in the project's own tools, if their role has `APIKeyAdminPermission`. Nobody creates a key for someone else: a key always acts as the person who made it.
+- **By an admin,** through `ListAPIKeys`, `RevokeAPIKey`, and `RevokeUserAPIKeys` in the project's own tools, which decide who may use them (§12). There's no endpoint for it. A key always acts as the person who made it.
 - **On its own:** when the user is deleted (foreign key cascade), and with `EndSessions` or "log out everywhere" (`DELETE /v1/sessions`). Changing a password doesn't revoke keys, so a password rotation doesn't break an integration. The email sent when a key is created covers that gap.
 - **On expiry.** Cleanup (§10) deletes expired keys. 14 days before a key expires, its owner gets an email naming it.
 
@@ -1653,20 +1653,20 @@ func (a *Auth) ListAPIKeys(ctx context.Context, userID uuid.UUID) ([]APIKey, err
 func (a *Auth) RevokeAPIKey(ctx context.Context, userID, keyID uuid.UUID, by Actor) error
 func (a *Auth) RevokeUserAPIKeys(ctx context.Context, userID uuid.UUID, by Actor) error
 
-func APIKeyFrom(ctx context.Context) (APIKeyInfo, bool)
+func APIKeyFrom(ctx context.Context) (APIKey, bool)
 ```
 
-Like the other admin calls (§12), they trust their caller with who may act, but still check `APIKeyPermissions`, the owner's role, the expiry limits, and the key limit. Errors: `ErrAPIKeyNotFound`, `ErrTooManyAPIKeys`, `ErrAPIKeyPermission`, `ErrAPIKeyExpiry`.
+Like the other admin calls (§12), they trust their caller with who may act, but still check `APIKeyPermissions`, the owner's role, the expiry limits, and the key limit. They send no email. Errors: `ErrAPIKeysOff`, `ErrAPIKeyNotFound`, `ErrInvalidAPIKeyName`, `ErrAPIKeyPermission`, `ErrAPIKeyExpiry`, `ErrTooManyAPIKeys`, and `ErrUserNotFound`.
 
 ### Events and email
 
-`api_key_created` and `api_key_revoked`, with the actor and metadata `api_key_id`, `name`, and `permissions`. They're the owner's, so they're in `Events(userID)`. A new key emails its owner, like a login from a new device (§10), so a key made with a stolen session doesn't go unnoticed.
+`api_key_created` and `api_key_revoked`, with the actor and metadata `api_key_id`, and for a new key `permissions`. A key revoked with the rest, by logging out everywhere or `EndSessions`, gets its own `api_key_revoked`. They're the owner's, so they're in `Events(userID)`. A new key emails its owner, like a login from a new device (§10), so a key made with a stolen session doesn't go unnoticed.
 
 Logs and events carry the key's ID, never the key, its hash, or its hint.
 
 ### Database
 
-Migrations `00018` and `00019`, backward compatible:
+Migration `00018`, backward compatible:
 
 ```
 auth.api_keys   id, user_id, name, key_hash bytea unique, hint, permissions text[],
@@ -1674,8 +1674,8 @@ auth.api_keys   id, user_id, name, key_hash bytea unique, hint, permissions text
                 created_at, updated_at
 ```
 
-- `user_id` references `auth.users` `ON DELETE CASCADE`, indexed `CONCURRENTLY` (`00019`).
-- `CHECK`s keep the name 1 to 100 characters and `expires_at` after `created_at`.
+- `user_id` references `auth.users` `ON DELETE CASCADE`, indexed with `created_at` for a user's list. The table is new and empty, so the index is built in the same migration, as in `00014`.
+- `CHECK`s keep the name 1 to 100 characters, the hint 6, the hash 32 bytes, 1 to 100 permissions, and `expires_at` after `created_at`.
 - Nothing existing changes. The previous release, still running during a deploy, never reads the table, and sees a key as a bad session token: `401`.
 
 ### Not in this release
