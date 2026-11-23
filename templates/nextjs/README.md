@@ -4,7 +4,7 @@ The web half of [`github.com/atlasopsec/auth`](../../README.md): the session coo
 
 It's a complete Next.js app so it can be run and tested, but projects **copy parts of it** into their own app rather than starting from it.
 
-**Template version 0.5.0**, for the auth module's `v1.5.0` and later. What changed between versions is in [CHANGELOG.md](CHANGELOG.md). Each copied file starts with a comment naming the version it came from.
+**Template version 0.6.0**, for the auth module's `v1.5.0` and later; the API keys page needs `v1.13.0`. What changed between versions is in [CHANGELOG.md](CHANGELOG.md). Each copied file starts with a comment naming the version it came from.
 
 ## What to copy
 
@@ -17,7 +17,7 @@ It's a complete Next.js app so it can be run and tested, but projects **copy par
 | `src/lib/auth/`                            | Cookies, `getSession` and `requireSession`, the server actions, and the safe `next` check                                                                               |
 | `src/components/auth/`                     | The forms. Restyle them freely                                                                                                                                          |
 | `src/app/(auth)/`                          | Log in, 2FA, sign up, forgot and reset password, verify email, confirm an email change, and accept an invitation. The module's emails link to these paths, so keep them |
-| `src/app/account/`                         | The account settings: password, email, sessions, and 2FA                                                                                                                |
+| `src/app/account/`                         | The account settings: password, email, sessions, and 2FA. `api-keys/` is the API keys page: copy it only with API keys on (below)                                       |
 | `src/app/oauth/`                           | Where Google and GitHub send the browser back, for the web app and the mobile app. Register both URLs with each provider                                                |
 
 The pages use three shadcn/ui-style components from `src/components/ui/` (`Button`, `Input`, `Label`). If your project already has shadcn/ui, use its own.
@@ -48,6 +48,14 @@ const invoices = await callApi("/v1/invoices", invoiceListSchema, {
   token: await getSessionToken(),
 });
 ```
+
+## API keys
+
+For projects that turn on the auth module's API keys (`Config.APIKeyPermissions`, [docs/api.md §18](../../docs/api.md)). `/account/api-keys` lists the user's keys, makes one with their password and, with 2FA on, a code, shows it once, and revokes them.
+
+- Copy `src/app/account/api-keys/`, `src/components/auth/api-key-forms.tsx`, and `src/lib/auth/api-keys.ts`, with the current `src/lib/auth/account-actions.ts`, `src/lib/auth/form-state.ts`, and `src/lib/api/schemas.ts`.
+- Set `API_KEY_PERMISSIONS` in `src/lib/auth/api-keys.ts` to the permissions in `Config.APIKeyPermissions`, each with a label. The page offers those; the Go API checks each again, and refuses any the user's role lacks.
+- Without keys, leave the page out and drop its link from `src/app/account/layout.tsx`: the Go API has no key endpoints, so the page would fail.
 
 ## Settings
 

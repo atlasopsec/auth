@@ -97,7 +97,12 @@ func run(ctx context.Context) error {
 			"admin":        {auth.PermOrganizationUpdate, auth.PermMembersRead, auth.PermMembersManage},
 			"member":       {auth.PermMembersRead},
 		},
-		OAuth: oauthFromEnv(),
+		// An app role and an API key permission, so the template's API keys
+		// page has something to offer. Give a user the role with SetAppRole.
+		AppRoles:          rbac.Roles{"reporter": {"reports:read"}},
+		APIKeyPermissions: []rbac.Permission{"reports:read"},
+		APIKeyPrefix:      "example",
+		OAuth:             oauthFromEnv(),
 	})
 	if err != nil {
 		return err
@@ -105,6 +110,11 @@ func run(ctx context.Context) error {
 
 	mux := http.NewServeMux()
 	a.Register(mux)
+	// A route an API key can call: GET /v1/reports with a "reports:read" key.
+	mux.Handle("GET /v1/reports", a.Require("reports:read", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": []any{}, "next_cursor": nil})
+	})))
 	mux.Handle("GET /healthz", a.Public(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})

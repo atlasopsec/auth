@@ -1,4 +1,4 @@
-// From the auth module's Next.js template (github.com/atlasopsec/auth, templates/nextjs), version 0.5.0.
+// From the auth module's Next.js template (github.com/atlasopsec/auth, templates/nextjs), version 0.6.0.
 import { ApiError } from "@/lib/api/client";
 
 // FormState is what a server action tells its form: a message for the whole
@@ -14,6 +14,8 @@ export type FormState = {
   setup?: { secret: string; qrCode: string };
   // New recovery codes, shown once.
   recoveryCodes?: string[];
+  // A new API key, shown once.
+  apiKey?: string;
 };
 
 export const SOMETHING_WENT_WRONG = "Something went wrong. Please try again.";

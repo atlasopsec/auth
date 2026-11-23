@@ -1,6 +1,6 @@
 "use server";
 
-// From the auth module's Next.js template (github.com/atlasopsec/auth, templates/nextjs), version 0.5.0.
+// From the auth module's Next.js template (github.com/atlasopsec/auth, templates/nextjs), version 0.6.0.
 import { cookies } from "next/headers";
 import { refresh } from "next/cache";
 import { redirect } from "next/navigation";
@@ -8,7 +8,15 @@ import QRCode from "qrcode";
 import { z } from "zod";
 
 import { ApiError, callApi, callApiNoContent } from "@/lib/api/client";
-import { recoveryCodesSchema, twoFactorSetupSchema } from "@/lib/api/schemas";
+import {
+  newApiKeySchema,
+  recoveryCodesSchema,
+  twoFactorSetupSchema,
+} from "@/lib/api/schemas";
+import {
+  API_KEY_LIFETIMES,
+  DEFAULT_API_KEY_LIFETIME,
+} from "@/lib/auth/api-keys";
 import { SESSION_COOKIE, clearedCookie } from "@/lib/auth/cookies";
 import { stateFromError, type FormState } from "@/lib/auth/form-state";
 import { fieldErrors } from "@/lib/auth/login";
@@ -247,4 +255,87 @@ export async function logOutEverywhere(_prev: FormState): Promise<FormState> {
   }
   (await cookies()).set(SESSION_COOKIE, "", clearedCookie);
   redirect("/login");
+}
+
+const API_KEYS_PATH = "/account/api-keys";
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+// createApiKey makes an API key, with the password and, when the user has
+// 2FA on, a code. The key comes back once, to show once.
+export async function createApiKey(
+  _prev: FormState,
+  formData: FormData,
+): Promise<FormState> {
+  const values = { name: String(formData.get("name") ?? "") };
+  const parsed = z
+    .object({
+      name: z
+        .string()
+        .trim()
+        .min(1, "Name the key.")
+        .max(100, "Keep the name to 100 characters."),
+      permissions: z
+        .array(z.string())
+        .min(1, "Choose at least one permission."),
+      lifetime: z.coerce
+        .number()
+        .refine(
+          (d) => (API_KEY_LIFETIMES as readonly number[]).includes(d),
+          "Choose how long the key lasts.",
+        )
+        .catch(DEFAULT_API_KEY_LIFETIME),
+      current_password: currentPassword,
+      // Only users with 2FA on are asked for one; the Go API says if it's
+      // missing.
+      code: z.string().trim(),
+    })
+    .safeParse({
+      ...read(formData, "name", "lifetime", "current_password", "code"),
+      permissions: formData.getAll("permissions").map(String),
+    });
+  if (!parsed.success) {
+    return { fieldErrors: fieldErrors(parsed.error), values };
+  }
+  const { name, permissions, lifetime, current_password, code } = parsed.data;
+  const out = await asUser(
+    API_KEYS_PATH,
+    (token) =>
+      callApi("/v1/api-keys", newApiKeySchema, {
+        method: "POST",
+        body: {
+          name,
+          permissions,
+          expires_at: new Date(Date.now() + lifetime * DAY_MS).toISOString(),
+          current_password,
+          ...(code ? { code } : {}),
+        },
+        token,
+      }),
+    values,
+  );
+  if ("state" in out) {
+    return out.state;
+  }
+  refresh();
+  return { done: true, apiKey: out.data.key };
+}
+
+// revokeApiKey revokes one of the user's API keys. It stops working at once.
+export async function revokeApiKey(
+  _prev: FormState,
+  formData: FormData,
+): Promise<FormState> {
+  const id = z.uuid().safeParse(formData.get("id"));
+  if (!id.success) {
+    return { message: "That key wasn't found." };
+  }
+  const out = await asUser(API_KEYS_PATH, (token) =>
+    callApiNoContent(`/v1/api-keys/${id.data}`, { method: "DELETE", token }),
+  );
+  if ("state" in out) {
+    return out.state;
+  }
+  refresh();
+  return { done: true };
 }
