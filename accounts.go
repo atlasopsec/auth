@@ -244,10 +244,12 @@ func (a *Auth) DeleteUser(ctx context.Context, userID uuid.UUID, by Actor) error
 }
 
 // EndSessions logs a user out everywhere, from code: it ends all their
-// sessions and any login waiting for a 2FA code. It's for admin tooling and
+// sessions and any login waiting for a 2FA code, and revokes their API
+// keys. It's for admin tooling and
 // support, such as when an account may be compromised. by is who's ending
 // them, for the security event log.
 func (a *Auth) EndSessions(ctx context.Context, userID uuid.UUID, by Actor) error {
+	var keys []uuid.UUID
 	err := a.withTx(ctx, func(tx pgx.Tx) error {
 		if _, err := db.New(tx).LockUser(ctx, userID); err != nil {
 			return fmt.Errorf("locking user: %w", err)
@@ -258,12 +260,17 @@ func (a *Auth) EndSessions(ctx context.Context, userID uuid.UUID, by Actor) erro
 		if err := db.New(tx).DeleteTwoFactorChallenges(ctx, userID); err != nil {
 			return fmt.Errorf("deleting 2FA challenges: %w", err)
 		}
-		return nil
+		var err error
+		keys, err = deleteUserAPIKeys(ctx, db.New(tx), userID)
+		return err
 	})
 	if err != nil {
 		return accountError("ending sessions", err)
 	}
 	a.adminEvent(ctx, by, Event{Type: EventLogoutEverywhere, UserID: &userID})
+	for _, id := range keys {
+		a.adminEvent(ctx, by, revokedKeyEvent(userID, id))
+	}
 	return nil
 }
 

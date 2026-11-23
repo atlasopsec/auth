@@ -69,6 +69,12 @@ const (
 	EventOrgRoleCreated = "org_role_created"
 	EventOrgRoleUpdated = "org_role_updated"
 	EventOrgRoleDeleted = "org_role_deleted"
+	// EventAPIKeyCreated and EventAPIKeyRevoked are changes to a user's API
+	// keys. Metadata "api_key_id", and for a new key "permissions",
+	// comma-separated. A key revoked with the rest when the user logs out
+	// everywhere, or by EndSessions, has its own EventAPIKeyRevoked.
+	EventAPIKeyCreated = "api_key_created"
+	EventAPIKeyRevoked = "api_key_revoked"
 )
 
 // Event is one entry in the security event log. It never contains
@@ -106,8 +112,9 @@ func (a *Auth) event(r *http.Request, typ string, userID, actorID *uuid.UUID, me
 
 // Actor is who makes a change through one of Auth's admin methods
 // (SetAppRole, SetTwoFactorRequired, ResetTwoFactor, CreateOrganization,
-// CreateUser, UpdateUser, DeleteUser, EndSessions, SetMemberRole, and
-// RemoveMember), and from where, for the security event log. Admin
+// CreateUser, UpdateUser, DeleteUser, EndSessions, SetMemberRole,
+// RemoveMember, CreateAPIKey, RevokeAPIKey, and RevokeUserAPIKeys), and
+// from where, for the security event log. Admin
 // tooling handling a request gets one with ActorOf. The zero Actor records
 // no one, for seed scripts and changes the system makes itself.
 type Actor struct {

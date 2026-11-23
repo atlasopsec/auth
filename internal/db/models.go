@@ -11,6 +11,21 @@ import (
 	"github.com/google/uuid"
 )
 
+type AuthApiKey struct {
+	ID                 uuid.UUID
+	UserID             uuid.UUID
+	Name               string
+	KeyHash            []byte
+	Hint               string
+	Permissions        []string
+	ExpiresAt          time.Time
+	LastUsedAt         *time.Time
+	LastUsedIp         *netip.Addr
+	ExpiryNoticeSentAt *time.Time
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+}
+
 type AuthAuthEvent struct {
 	ID        uuid.UUID
 	UserID    *uuid.UUID

@@ -10,7 +10,7 @@ import (
 	"github.com/atlasopsec/auth/internal/db"
 )
 
-// Cleanup deletes what has expired: sessions, email links, accepted and
+// Cleanup deletes what has expired: sessions, API keys, email links, accepted and
 // expired invitations, 2FA challenges and old wrong-code records, OAuth
 // flows, used Apple sign-in nonces, ended rate-limit windows and login
 // delays, and security events over a year old. Apart from the events, they're already refused, so this only
@@ -27,6 +27,7 @@ func (a *Auth) Cleanup(ctx context.Context) error {
 		del  func() (int64, error)
 	}{
 		{"sessions", func() (int64, error) { return a.sessions.DeleteExpired(ctx) }},
+		{"API keys", func() (int64, error) { return a.q.DeleteExpiredAPIKeys(ctx, now) }},
 		{"email tokens", func() (int64, error) { return a.tokens.DeleteSpent(ctx) }},
 		{"invitations", func() (int64, error) { return a.q.DeleteEndedInvitations(ctx, now) }},
 		{"2FA challenges", func() (int64, error) {

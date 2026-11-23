@@ -37,6 +37,9 @@ type current struct {
 	// can checks a permission against the role Require or RequireOrg
 	// looked up. It's nil under Authenticated, where Can is always false.
 	can func(rbac.Permission) bool
+	// apiKey is set when Require let in a request made with an API key.
+	// session is then the zero value.
+	apiKey *APIKey
 }
 
 // guarded marks a handler as wrapped by one of the module's access rules,
@@ -132,6 +135,11 @@ func withCurrent(r *http.Request, c current) *http.Request {
 // (Config.AppRoles) grants permission. Otherwise it responds 401 or
 // 403 forbidden.
 //
+// With Config.APIKeyPermissions set, it also takes an API key in the same
+// Authorization: Bearer header. The key grants only what it lists, is
+// allowed for keys, and its owner's role has now. Inside h, UserFrom
+// returns the owner, APIKeyFrom the key, and SessionFrom nothing.
+//
 // It panics if no app role lists permission, which catches a misspelled
 // permission when the route is registered rather than denying it silently.
 func (a *Auth) Require(permission rbac.Permission, h http.Handler) http.Handler {
@@ -139,6 +147,12 @@ func (a *Auth) Require(permission rbac.Permission, h http.Handler) http.Handler 
 		panic(fmt.Sprintf("auth: Require(%q): no role in Config.AppRoles has this permission; is it misspelled?", permission))
 	}
 	return guarded{httpapi.WithRequestID(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Only Require takes API keys. Every other access rule checks the
+		// token as a session's, and a key never is one.
+		if hash, ok := a.keyHash(r); ok {
+			a.serveKey(w, r, hash, permission, h)
+			return
+		}
 		c, ok := a.authenticate(w, r, false)
 		if !ok {
 			return
@@ -292,10 +306,11 @@ func UserFrom(ctx context.Context) (u User, ok bool) {
 }
 
 // SessionFrom returns the current session. ok is false outside the
-// module's access rules, which is a bug in the calling code.
+// module's access rules, which is a bug in the calling code, and for a
+// request Require let in with an API key (see APIKeyFrom).
 func SessionFrom(ctx context.Context) (s Session, ok bool) {
 	c, ok := ctx.Value(contextKey{}).(current)
-	if !ok {
+	if !ok || c.apiKey != nil {
 		return Session{}, false
 	}
 	return sessionFromInternal(c.session), true
