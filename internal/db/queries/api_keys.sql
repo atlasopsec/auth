@@ -35,3 +35,25 @@ RETURNING id, name;
 
 -- name: DeleteExpiredAPIKeys :execrows
 DELETE FROM auth.api_keys WHERE expires_at <= @now;
+
+-- Claims the keys whose owners should be told they expire soon, and marks
+-- them told, in one statement, so two API instances cleaning up at once
+-- never send the same notice twice. Keys made to last 14 days or less
+-- aren't included: their owner chose that. The 14 days match
+-- apiKeyExpiryNotice in Go.
+-- name: ClaimAPIKeyExpiryNotices :many
+UPDATE auth.api_keys k
+SET expiry_notice_sent_at = @now, updated_at = @now
+FROM auth.users u
+WHERE u.id = k.user_id
+  AND k.id IN (
+    SELECT due.id FROM auth.api_keys due
+    WHERE due.expiry_notice_sent_at IS NULL
+      AND due.expires_at > @now
+      AND due.expires_at <= @notice_before
+      AND due.expires_at - due.created_at > interval '14 days'
+    ORDER BY due.expires_at
+    LIMIT @max_rows
+    FOR UPDATE SKIP LOCKED
+  )
+RETURNING k.id, k.name, k.expires_at, u.email;

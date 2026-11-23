@@ -13,6 +13,67 @@ import (
 	"github.com/google/uuid"
 )
 
+const claimAPIKeyExpiryNotices = `-- name: ClaimAPIKeyExpiryNotices :many
+UPDATE auth.api_keys k
+SET expiry_notice_sent_at = $1, updated_at = $1
+FROM auth.users u
+WHERE u.id = k.user_id
+  AND k.id IN (
+    SELECT due.id FROM auth.api_keys due
+    WHERE due.expiry_notice_sent_at IS NULL
+      AND due.expires_at > $1
+      AND due.expires_at <= $2
+      AND due.expires_at - due.created_at > interval '14 days'
+    ORDER BY due.expires_at
+    LIMIT $3
+    FOR UPDATE SKIP LOCKED
+  )
+RETURNING k.id, k.name, k.expires_at, u.email
+`
+
+type ClaimAPIKeyExpiryNoticesParams struct {
+	Now          *time.Time
+	NoticeBefore time.Time
+	MaxRows      int32
+}
+
+type ClaimAPIKeyExpiryNoticesRow struct {
+	ID        uuid.UUID
+	Name      string
+	ExpiresAt time.Time
+	Email     string
+}
+
+// Claims the keys whose owners should be told they expire soon, and marks
+// them told, in one statement, so two API instances cleaning up at once
+// never send the same notice twice. Keys made to last 14 days or less
+// aren't included: their owner chose that. The 14 days match
+// apiKeyExpiryNotice in Go.
+func (q *Queries) ClaimAPIKeyExpiryNotices(ctx context.Context, arg ClaimAPIKeyExpiryNoticesParams) ([]ClaimAPIKeyExpiryNoticesRow, error) {
+	rows, err := q.db.Query(ctx, claimAPIKeyExpiryNotices, arg.Now, arg.NoticeBefore, arg.MaxRows)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ClaimAPIKeyExpiryNoticesRow
+	for rows.Next() {
+		var i ClaimAPIKeyExpiryNoticesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.ExpiresAt,
+			&i.Email,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const countActiveUserAPIKeys = `-- name: CountActiveUserAPIKeys :one
 SELECT count(*) FROM auth.api_keys WHERE user_id = $1 AND expires_at > $2
 `

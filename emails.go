@@ -63,6 +63,12 @@ type Emails struct {
 	// browser or app and network it hasn't been used from in the last 90
 	// days. Device and LoggedInAt are set. Link is empty.
 	NewDeviceLogin func(EmailData) (subject, text, html string)
+	// APIKeyCreated tells a user an API key was made for their account.
+	// APIKeyName and APIKeyExpiresAt are set. Link is empty.
+	APIKeyCreated func(EmailData) (subject, text, html string)
+	// APIKeyExpiring tells a user one of their API keys expires in 14
+	// days. APIKeyName and APIKeyExpiresAt are set. Link is empty.
+	APIKeyExpiring func(EmailData) (subject, text, html string)
 }
 
 // EmailData is what an email template can use.
@@ -90,6 +96,11 @@ type EmailData struct {
 	Device string
 	// LoggedInAt is when the login happened, in UTC, for NewDeviceLogin.
 	LoggedInAt time.Time
+	// APIKeyName is the key's name, for APIKeyCreated and APIKeyExpiring.
+	// The user chose it, so treat it as untrusted text.
+	APIKeyName string
+	// APIKeyExpiresAt is when the key stops working, in UTC.
+	APIKeyExpiresAt time.Time
 }
 
 func defaultVerifyEmail(d EmailData) (string, string, string) {
@@ -233,6 +244,34 @@ func defaultOAuthUnlinked(d EmailData) (string, string, string) {
 
 If you didn't do this, reset your password now at %s/reset-password.
 `, d.AppName, d.Provider, d.AppURL),
+		""
+}
+
+func defaultAPIKeyCreated(d EmailData) (string, string, string) {
+	return "New API key on your " + d.AppName + " account",
+		fmt.Sprintf(`An API key was just added to your %s account.
+
+Name: %s
+Works until: %s
+
+Anything holding the key can act as you, with the permissions it was given, until then.
+
+If this was you, you can ignore this email.
+
+If it wasn't, log out of every device from your account settings, which also revokes every API key, then reset your password at %s/reset-password.
+`, d.AppName, d.APIKeyName, d.APIKeyExpiresAt.UTC().Format("2 January 2006 at 15:04 UTC"), d.AppURL),
+		""
+}
+
+func defaultAPIKeyExpiring(d EmailData) (string, string, string) {
+	return "An API key on your " + d.AppName + " account expires soon",
+		fmt.Sprintf(`An API key on your %s account stops working soon.
+
+Name: %s
+Works until: %s
+
+Anything still using it will stop working then. To keep it working, make a new key in your account settings, put it in place of this one, and revoke this one.
+`, d.AppName, d.APIKeyName, d.APIKeyExpiresAt.UTC().Format("2 January 2006 at 15:04 UTC")),
 		""
 }
 

@@ -4,6 +4,25 @@ What changed in each release of `github.com/atlasopsec/auth`. The Next.js templa
 
 The exported Go API and the HTTP endpoints follow [semantic versioning](https://semver.org): a minor release only adds, and anything removed or changed waits for the next major version.
 
+## v1.13.0
+
+API keys, for machines that call a project's API. Off unless `Config.APIKeyPermissions` is set. **Run `Migrate` before deploying:** migration `00018` adds the table `auth.api_keys` and changes nothing existing. See [docs/api.md §18](docs/api.md).
+
+### Added
+
+- `Config.APIKeyPermissions` and `Config.APIKeyPrefix`. `Require` takes a key in `Authorization: Bearer`, and grants only what the key lists, keys may still carry, and its owner's app role has now. Every other access rule, and every module endpoint, refuses keys.
+- `GET`, `POST /v1/api-keys` and `DELETE /v1/api-keys/{id}`, with a session only. Creating a key takes the password, and a 2FA code when the user has 2FA on.
+- `CreateAPIKey`, `ListAPIKeys`, `RevokeAPIKey`, `RevokeUserAPIKeys`, `APIKeyFrom`, `APIKey`, `NewAPIKey`, `DefaultAPIKeyLifetime`, `MaxAPIKeyLifetime`, and `MaxAPIKeys`.
+- The errors `ErrAPIKeysOff`, `ErrAPIKeyNotFound`, `ErrInvalidAPIKeyName`, `ErrAPIKeyPermission`, `ErrAPIKeyExpiry`, and `ErrTooManyAPIKeys`, and the error code `too_many_api_keys` (`409`).
+- The events `api_key_created` and `api_key_revoked`.
+- The emails `Emails.APIKeyCreated` and `Emails.APIKeyExpiring`, with `EmailData.APIKeyName` and `EmailData.APIKeyExpiresAt`.
+
+### Changed
+
+- Logging out everywhere (`DELETE /v1/sessions`) and `EndSessions` also revoke the user's API keys.
+- `Cleanup` also deletes expired keys, and emails the owner of each key 14 days before it expires.
+- `SessionFrom` returns `false` for a request `Require` let in with a key.
+
 ## v1.12.0
 
 Custom roles in invitations. **Run `Migrate` before deploying:** migrations `00016` (a nullable column and constraints on `auth.invitations`, added `NOT VALID` then validated) and `00017` (an index built `CONCURRENTLY`). Neither changes existing rows. See [docs/api.md §15](docs/api.md).
