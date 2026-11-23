@@ -2,6 +2,12 @@
 
 Changes to the Next.js template. Projects that copied it can check here what to copy again.
 
+## 0.6.0
+
+Works with the auth module's `v1.5.0` and later; the API keys page needs `v1.13.0` with `Config.APIKeyPermissions` set. Every copied file's header comment now says 0.6.0, but files not named here are otherwise unchanged.
+
+- **Added:** `/account/api-keys`, the API keys page: the user's keys with their permissions, expiry, and last use, a form to make one (name, permissions, 30 to 365 days, the password, and a 2FA code when 2FA is on) that shows the key once, and a button to revoke each. See "API keys" in the README. Copy the new `src/app/account/api-keys/`, `src/components/auth/api-key-forms.tsx`, and `src/lib/auth/api-keys.ts`, and `src/lib/auth/account-actions.ts`, `src/lib/auth/form-state.ts`, `src/lib/api/schemas.ts`, and `src/app/account/layout.tsx`. Set `API_KEY_PERMISSIONS` to your project's.
+
 ## 0.5.0
 
 Works with the auth module's `v1.5.0` and later: the 2FA step now sends `device_token`, which earlier versions refuse as an unknown field (`400`). Every copied file's header comment now says 0.5.0, but files not named here are otherwise unchanged.

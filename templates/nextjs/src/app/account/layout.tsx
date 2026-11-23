@@ -1,4 +1,4 @@
-// From the auth module's Next.js template (github.com/atlasopsec/auth, templates/nextjs), version 0.5.0.
+// From the auth module's Next.js template (github.com/atlasopsec/auth, templates/nextjs), version 0.6.0.
 import Link from "next/link";
 import type { ReactNode } from "react";
 
@@ -9,6 +9,8 @@ export default function AccountLayout({ children }: { children: ReactNode }) {
         <Link href="/dashboard">Dashboard</Link>
         <Link href="/account">Account</Link>
         <Link href="/account/two-factor">Two-factor authentication</Link>
+        {/* Only with API keys on: see src/app/account/api-keys/page.tsx. */}
+        <Link href="/account/api-keys">API keys</Link>
       </nav>
       {children}
     </main>

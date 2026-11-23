@@ -1,4 +1,4 @@
-// From the auth module's Next.js template (github.com/atlasopsec/auth, templates/nextjs), version 0.5.0.
+// From the auth module's Next.js template (github.com/atlasopsec/auth, templates/nextjs), version 0.6.0.
 import { z } from "zod";
 
 export const userSchema = z.object({
@@ -91,3 +91,22 @@ export const oauthAccountsSchema = z.object({
     }),
   ),
 });
+
+// An API key, from GET /v1/api-keys. Never the key itself.
+export const apiKeySchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  hint: z.string(),
+  permissions: z.array(z.string()),
+  created_at: z.string(),
+  expires_at: z.string(),
+  last_used_at: z.string().nullable(),
+  last_used_ip: z.string().nullable(),
+});
+
+export type ApiKeyInfo = z.infer<typeof apiKeySchema>;
+
+export const apiKeyListSchema = z.object({ data: z.array(apiKeySchema) });
+
+// POST /v1/api-keys: the key, sent this once.
+export const newApiKeySchema = apiKeySchema.extend({ key: z.string() });
