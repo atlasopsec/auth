@@ -388,6 +388,12 @@ func New(cfg Config) (*Auth, error) {
 	if a.emails.NewDeviceLogin == nil {
 		a.emails.NewDeviceLogin = defaultNewDeviceLogin
 	}
+	if a.emails.APIKeyCreated == nil {
+		a.emails.APIKeyCreated = defaultAPIKeyCreated
+	}
+	if a.emails.APIKeyExpiring == nil {
+		a.emails.APIKeyExpiring = defaultAPIKeyExpiring
+	}
 	if cfg.BcryptCost != 0 && !cfg.AllowBcryptHashes {
 		return nil, errors.New("auth: Config.BcryptCost is set, but Config.AllowBcryptHashes isn't")
 	}

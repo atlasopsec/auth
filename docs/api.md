@@ -1576,11 +1576,11 @@ Not built yet. Recorded so that nothing built now blocks them. **The module will
 
 ---
 
-## 18. Next: API keys (design, for v1.13.0)
+## 18. API keys (v1.13.0)
 
 For machines that call a project's API on a schedule, such as a security tool pulling a blocklist every hour. A session is the wrong credential for that: it needs a password and a 2FA code to start, lasts 12 hours for privileged roles, and ends at logout.
 
-Not built yet. A key belongs to one user and acts as that user, with fewer permissions. It isn't another kind of account, so every check a project makes for a user applies to their key as it is. Confirmed in review on 2026-11-23.
+A key belongs to one user and acts as that user, with fewer permissions. It isn't another kind of account, so every check a project makes for a user applies to their key as it is. Confirmed in review on 2026-11-23.
 
 ```go
 // Off when empty: the key endpoints aren't registered and Require turns keys away.
@@ -1631,10 +1631,12 @@ A key skips 2FA when used, since a machine can't type a code. It makes up for th
 | Endpoint | Purpose | Requires |
 |---|---|---|
 | `GET /v1/api-keys` | The caller's keys, cursor-paged | A session |
-| `POST /v1/api-keys` | Create one: `{ name, permissions, expires_at?, password, code? }` | A session, plus the password and, with 2FA on, a current code |
+| `POST /v1/api-keys` | Create one: `{ name, permissions, expires_at, current_password, code }` | A session, plus the password and, with 2FA on, a current code |
 | `DELETE /v1/api-keys/{id}` | Revoke one of the caller's keys (`404` for anyone else's) | A session |
 
-A key is returned as `{ id, name, hint, permissions, created_at, expires_at, last_used_at }`. `POST` adds `key`, the only time it's ever sent. A wrong password or code gets the same answers as changing a password, under the same limits. Asking for a permission outside `APIKeyPermissions`, or one the caller's role lacks, is `422`.
+A key is returned as `{ id, name, hint, permissions, created_at, expires_at, last_used_at, last_used_ip }`, the last two `null` until it's used. `POST` answers `201` and adds `key`, the only time it's ever sent. The list is `{ "data": [...], "next_cursor": null }`, newest first: a user has at most 10 working keys.
+
+On `POST`, `expires_at` is RFC 3339, or `null` for 90 days. `code` is needed only when the user has 2FA on, and may be a recovery code. The checks that need nothing stored come first, so a typo doesn't cost a code: a bad `name`, `permissions` (empty, or outside `APIKeyPermissions`), or `expires_at` is `422 validation_failed` with those fields, alongside a missing `current_password` or `code`. Then the password and the code are checked under the same limits as the other endpoints that take them, with the same answers. Then the key is made: a permission the user's role lacks is `422` on `permissions`, and an 11th key is `409 too_many_api_keys`. A user without a password gets `409 password_not_set`, as when changing a password. `POST` is also limited per address like logins.
 
 The key endpoints stay on under `AccountsManagedElsewhere` (§16), since a key isn't an account.
 

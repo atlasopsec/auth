@@ -16,6 +16,9 @@ import (
 // delays, and security events over a year old. Apart from the events, they're already refused, so this only
 // frees space.
 //
+// It also emails the owners of API keys that expire in the next 14 days,
+// once per key, so a key's replacement can be put in place in time.
+//
 // A background job runs it every hour, unless Config.DisableCleanup is
 // set; then call it on your own schedule. Running it from several API
 // instances at once is harmless.
@@ -51,6 +54,9 @@ func (a *Auth) Cleanup(ctx context.Context) error {
 		if n > 0 {
 			a.log.DebugContext(ctx, "auth: cleaned up", slog.String("what", step.what), slog.Int64("deleted", n))
 		}
+	}
+	if err := a.sendAPIKeyExpiryNotices(ctx, now); err != nil {
+		errs = append(errs, err)
 	}
 	if err := errors.Join(errs...); err != nil {
 		return fmt.Errorf("auth: cleanup: %w", err)
@@ -93,4 +99,35 @@ func (a *Auth) startCleanup(first, every time.Duration) {
 			timer.Reset(every)
 		}
 	}()
+}
+
+// apiKeyExpiryNotice is how long before a key expires its owner is told.
+// ClaimAPIKeyExpiryNotices leaves out keys made to last no longer.
+const apiKeyExpiryNotice = 14 * 24 * time.Hour
+
+// maxExpiryNotices is how many expiry notices one cleanup sends. The rest
+// go at the next.
+const maxExpiryNotices = 500
+
+// sendAPIKeyExpiryNotices emails the owner of each key that expires within
+// apiKeyExpiryNotice and hasn't had its notice. A key is marked as told
+// when it's claimed, so a notice the mailer then fails to send isn't
+// retried: the sender already retries, and the key's list shows its
+// expiry.
+func (a *Auth) sendAPIKeyExpiryNotices(ctx context.Context, now time.Time) error {
+	rows, err := a.q.ClaimAPIKeyExpiryNotices(ctx, db.ClaimAPIKeyExpiryNoticesParams{
+		Now: &now, NoticeBefore: now.Add(apiKeyExpiryNotice), MaxRows: maxExpiryNotices,
+	})
+	if err != nil {
+		return fmt.Errorf("claiming API key expiry notices: %w", err)
+	}
+	for _, k := range rows {
+		a.send(k.Email, a.emails.APIKeyExpiring, EmailData{
+			AppName: a.appName, AppURL: a.appURL, APIKeyName: k.Name, APIKeyExpiresAt: k.ExpiresAt.UTC(),
+		}, k.ID)
+	}
+	if len(rows) > 0 {
+		a.log.InfoContext(ctx, "auth: API key expiry notices sent", slog.Int("count", len(rows)))
+	}
+	return nil
 }

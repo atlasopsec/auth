@@ -128,9 +128,9 @@ func (a *Auth) CreateAPIKey(ctx context.Context, userID uuid.UUID, k NewAPIKey, 
 	if a.keyPrefix == "" {
 		return APIKey{}, "", ErrAPIKeysOff
 	}
-	name := strings.TrimSpace(k.Name)
-	if name == "" || utf8.RuneCountInString(name) > maxAPIKeyName {
-		return APIKey{}, "", ErrInvalidAPIKeyName
+	name, err := cleanAPIKeyName(k.Name)
+	if err != nil {
+		return APIKey{}, "", err
 	}
 	perms := slices.Clone(k.Permissions)
 	slices.Sort(perms)
@@ -139,12 +139,9 @@ func (a *Auth) CreateAPIKey(ctx context.Context, userID uuid.UUID, k NewAPIKey, 
 		return APIKey{}, "", ErrAPIKeyPermission
 	}
 	now := a.now().UTC().Truncate(time.Microsecond)
-	expires := k.ExpiresAt.UTC().Truncate(time.Microsecond)
-	if k.ExpiresAt.IsZero() {
-		expires = now.Add(DefaultAPIKeyLifetime)
-	}
-	if !expires.After(now) || expires.After(now.Add(MaxAPIKeyLifetime)) {
-		return APIKey{}, "", ErrAPIKeyExpiry
+	expires, err := a.apiKeyExpiry(k.ExpiresAt)
+	if err != nil {
+		return APIKey{}, "", err
 	}
 	id, err := uuid.NewV7()
 	if err != nil {
@@ -164,7 +161,7 @@ func (a *Auth) CreateAPIKey(ctx context.Context, userID uuid.UUID, k NewAPIKey, 
 			return fmt.Errorf("reading app role: %w", err)
 		}
 		for _, p := range perms {
-			if !slices.Contains(a.keyPerms, p) || !a.appRoles.Has(role, p) {
+			if !a.keyMayCarry(p) || !a.appRoles.Has(role, p) {
 				return ErrAPIKeyPermission
 			}
 		}
@@ -202,6 +199,35 @@ func (a *Auth) CreateAPIKey(ctx context.Context, userID uuid.UUID, k NewAPIKey, 
 		"permissions": strings.Join(permStrings(perms), ","),
 	}})
 	return created, key, nil
+}
+
+// cleanAPIKeyName trims a key's name and checks it.
+func cleanAPIKeyName(name string) (string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" || utf8.RuneCountInString(name) > maxAPIKeyName {
+		return "", ErrInvalidAPIKeyName
+	}
+	return name, nil
+}
+
+// apiKeyExpiry returns when a key asked to expire at t does: zero means
+// DefaultAPIKeyLifetime from now. It must be in the future and at most
+// MaxAPIKeyLifetime away.
+func (a *Auth) apiKeyExpiry(t time.Time) (time.Time, error) {
+	now := a.now().UTC().Truncate(time.Microsecond)
+	if t.IsZero() {
+		return now.Add(DefaultAPIKeyLifetime), nil
+	}
+	t = t.UTC().Truncate(time.Microsecond)
+	if !t.After(now) || t.After(now.Add(MaxAPIKeyLifetime)) {
+		return time.Time{}, ErrAPIKeyExpiry
+	}
+	return t, nil
+}
+
+// keyMayCarry reports whether p is in Config.APIKeyPermissions.
+func (a *Auth) keyMayCarry(p rbac.Permission) bool {
+	return slices.Contains(a.keyPerms, p)
 }
 
 // ListAPIKeys returns userID's keys, newest first, including any that
@@ -347,7 +373,7 @@ func (a *Auth) serveKey(w http.ResponseWriter, r *http.Request, hash []byte, per
 	}
 	key := apiKeyFromRow(row)
 	can := func(p rbac.Permission) bool {
-		return slices.Contains(key.Permissions, p) && slices.Contains(a.keyPerms, p) && a.appRoles.Has(role, p)
+		return slices.Contains(key.Permissions, p) && a.keyMayCarry(p) && a.appRoles.Has(role, p)
 	}
 	if !can(permission) {
 		writeForbidden(w, r)

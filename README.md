@@ -94,6 +94,10 @@ Logins, failed logins, logouts, and every password, 2FA, OAuth, email, and role 
 
 Users are emailed when they log in from a browser or app and network (IPv4 `/24` or IPv6 `/48`) that hasn't logged in to their account in the last 90 days. Override the email with `Emails.NewDeviceLogin`, or turn it off with `Config.DisableNewDeviceEmails`.
 
+## API keys
+
+For machines that call the project's API, such as a tool pulling a list every hour. Set `Config.APIKeyPermissions` to the permissions a key may carry, and `Config.APIKeyPrefix` to a short name that starts every key. Users make keys with `POST /v1/api-keys`, giving their password and 2FA code. A key acts as the user who made it, only under `Require`, and only with what it lists and their role still has. Every key expires within a year, and its owner is emailed when it's made and 14 days before it expires. Only a hash is stored. See [docs/api.md §18](docs/api.md).
+
 ## Next.js template
 
 [`templates/nextjs`](templates/nextjs/README.md) is the web half: the session cookie, `proxy.ts`, a session helper, the login, 2FA, and sign-up pages, and the pages the module's emails link to. Projects copy its auth parts into their own Next.js app.

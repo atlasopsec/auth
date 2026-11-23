@@ -50,6 +50,7 @@ func (a *Auth) Register(mux *http.ServeMux) {
 	mux.Handle("DELETE /v1/sessions/current", endpoint(a.duringSetup(http.HandlerFunc(a.logOut))))
 	mux.Handle("DELETE /v1/sessions/{id}", endpoint(a.Authenticated(http.HandlerFunc(a.endSession))))
 	mux.Handle("DELETE /v1/sessions", endpoint(a.Authenticated(http.HandlerFunc(a.logOutEverywhere))))
+	a.registerAPIKeys(mux)
 }
 
 // endpoint adds what every module endpoint needs. Responses carry tokens
