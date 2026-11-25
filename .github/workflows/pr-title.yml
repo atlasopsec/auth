@@ -23,4 +23,4 @@ permissions:
 
 jobs:
   pr-title:
-    uses: atlasopsec/workflows/.github/workflows/pr-title.yml@v1
+    uses: atlasopsec/workflows/.github/workflows/pr-title.yml@v2
