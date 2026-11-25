@@ -20,4 +20,4 @@ permissions:
 
 jobs:
   gitleaks:
-    uses: atlasopsec/workflows/.github/workflows/gitleaks.yml@v1
+    uses: atlasopsec/workflows/.github/workflows/gitleaks.yml@v2
