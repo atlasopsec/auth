@@ -26,7 +26,7 @@ permissions:
 jobs:
   go:
     if: github.event.pull_request.draft == false
-    uses: atlasopsec/workflows/.github/workflows/go.yml@v1
+    uses: atlasopsec/workflows/.github/workflows/go.yml@v2
     with:
       working-directory: .
       tools-modfile: tools/go.mod
